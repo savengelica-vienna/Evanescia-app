@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' show Random;
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'dart:ui' as ui;
 import 'dart:typed_data';
@@ -139,47 +140,124 @@ class _ShadowPainter extends CustomPainter {
   bool shouldRepaint(covariant _ShadowPainter o) => o.radius != radius;
 }
 
-class _RimPainter extends CustomPainter {
-  final double radius, width;
-  const _RimPainter({required this.radius, this.width = 1.4});
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final rr = RRect.fromRectAndRadius(rect, Radius.circular(radius)).deflate(width / 2);
-    canvas.drawRRect(
-      rr,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = width
-        ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Colors.white.withOpacity(.95),
-            Colors.white.withOpacity(.10),
-            Colors.white.withOpacity(.10),
-            Colors.white.withOpacity(.65),
-          ],
-          stops: const [0, .38, .62, 1],
-        ).createShader(rect),
-    );
-    // garis dalam tipis untuk kesan ketebalan kaca
-    canvas.drawRRect(
-      rr.deflate(width + .5),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = Colors.white.withOpacity(.07),
-    );
+// ---------- LIQUID GLASS (gaya "glass button" 2025-05-29) ----------
+// Lapisan: bayangan luar -> blur latar -> isi tint tipis -> bayangan DALAM
+// berlapis (inset, seperti box-shadow inset di CSS) -> rim conic -> kilau.
+double _cssRim(double cssDeg) => (-90 + cssDeg) * math.pi / 180;
+
+class _SkinPainter extends CustomPainter {
+  final double radius, light, dark, rimWidth, press;
+  final bool full, indicator;
+  final double? shine;
+  const _SkinPainter({
+    required this.radius,
+    this.light = 1,
+    this.dark = 1,
+    this.rimWidth = 1.3,
+    this.press = 0,
+    this.full = true,
+    this.indicator = false,
+    this.shine,
+  });
+
+  // Meniru `box-shadow: inset dx dy blur spread color` dari CSS.
+  static void _inset(Canvas c, RRect rr, Color col, double dx, double dy, double blur, double spread) {
+    c.save();
+    c.clipRRect(rr);
+    final outer = Path()..addRect(rr.outerRect.inflate(80 + dx.abs() + dy.abs()));
+    final hole = Path()..addRRect(rr.shift(Offset(dx, dy)).deflate(spread));
+    final paint = Paint()..color = col;
+    if (blur > 0) paint.maskFilter = MaskFilter.blur(BlurStyle.normal, blur / 2);
+    c.drawPath(Path.combine(PathOperation.difference, outer, hole), paint);
+    c.restore();
   }
 
   @override
-  bool shouldRepaint(covariant _RimPainter o) => o.radius != radius || o.width != width;
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rr = RRect.fromRectAndRadius(rect, Radius.circular(radius));
+    Color w(double a) => Colors.white.withOpacity((a * light).clamp(0.0, 1.0));
+    Color k(double a) => Colors.black.withOpacity((a * dark).clamp(0.0, 1.0));
+
+    if (indicator) {
+      _inset(canvas, rr, w(.10), 0, 0, 0, 1);
+      _inset(canvas, rr, w(.90), 2, 1, 0, -1);
+      _inset(canvas, rr, w(.80), -1.5, -1, 0, -1);
+      _inset(canvas, rr, w(.60), -2, -6, 1, -5);
+      _inset(canvas, rr, k(.20), -1, 2, 3, -1);
+      _inset(canvas, rr, k(.10), 0, -4, 1, -2);
+    } else {
+      _inset(canvas, rr, w(.10), 0, 0, 0, 1);
+      _inset(canvas, rr, w(.90), 1.8, 3, 0, -2);
+      _inset(canvas, rr, w(.80), -2, -2, 0, -2);
+      if (full) {
+        _inset(canvas, rr, w(.60), -3, -8, 1, -6);
+        _inset(canvas, rr, k(.12), -.3, -1, 4, 0);
+        _inset(canvas, rr, k(.20), -1.5, 2.5, 0, -2);
+        _inset(canvas, rr, k(.10), 2, -6.5, 1, -4);
+      }
+      _inset(canvas, rr, k(.20), 0, 3, 4, -2);
+    }
+
+    // rim: garis tepi conic, terang di dua sudut berlawanan, berputar saat ditekan
+    if (rimWidth > 0) {
+      canvas.drawRRect(
+        rr.deflate(rimWidth / 2),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = rimWidth
+          ..shader = SweepGradient(
+            colors: [w(.95), w(.16), w(.16), w(.95), w(.16), w(.16), w(.95)],
+            stops: const [0, .05, .40, .50, .60, .95, 1],
+            transform: GradientRotation(_cssRim(-75 - 50 * press)),
+          ).createShader(rect),
+      );
+    }
+
+    // kilau diagonal yang bergeser saat ditekan
+    final sh = shine;
+    if (sh != null) {
+      final pos = .25 + .4 * sh;
+      double s(double v) => v.clamp(0.0, 1.0);
+      canvas.save();
+      canvas.clipRRect(rr);
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..blendMode = BlendMode.screen
+          ..shader = LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.white.withOpacity(0),
+              Colors.white.withOpacity(.34),
+              Colors.white.withOpacity(.34),
+              Colors.white.withOpacity(0),
+            ],
+            stops: [s(pos - .16), s(pos - .04), s(pos + .04), s(pos + .16)],
+          ).createShader(rect),
+      );
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SkinPainter o) =>
+      o.radius != radius ||
+      o.light != light ||
+      o.dark != dark ||
+      o.rimWidth != rimWidth ||
+      o.press != press ||
+      o.full != full ||
+      o.indicator != indicator ||
+      o.shine != shine;
 }
 
 class Glass extends StatelessWidget {
   final Widget child;
-  final double radius, blur, strength;
+  final double radius, blur, strength, press;
+  final double? shine;
+  final bool full;
   final Color tint;
   final EdgeInsetsGeometry padding;
   const Glass({
@@ -190,6 +268,9 @@ class Glass extends StatelessWidget {
     this.strength = .46,
     this.tint = card,
     this.padding = EdgeInsets.zero,
+    this.full = false,
+    this.press = 0,
+    this.shine,
   });
 
   @override
@@ -202,7 +283,15 @@ class Glass extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
           child: CustomPaint(
-            foregroundPainter: _RimPainter(radius: radius),
+            foregroundPainter: _SkinPainter(
+              radius: radius,
+              full: full,
+              light: full ? 1.0 : .75,
+              dark: full ? 1.5 : 1.0,
+              rimWidth: full ? 1.4 : 1.0,
+              press: press,
+              shine: shine,
+            ),
             child: Container(
               padding: padding,
               decoration: BoxDecoration(
@@ -210,16 +299,8 @@ class Glass extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [tint.withOpacity(strength), tint.withOpacity(strength * .62)],
-                ),
-              ),
-              foregroundDecoration: BoxDecoration(
-                borderRadius: r,
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.white.withOpacity(.20), Colors.white.withOpacity(.03), Colors.white.withOpacity(0)],
-                  stops: const [0, .35, .7],
+                  colors: [tint.withOpacity(strength * .7), tint.withOpacity(strength), tint.withOpacity(strength * .7)],
+                  stops: const [0, .5, 1],
                 ),
               ),
               child: child,
@@ -239,7 +320,7 @@ Widget glassBox(Widget child) => Padding(
       ),
     );
 
-class GlassButton extends StatelessWidget {
+class GlassButton extends StatefulWidget {
   final Widget icon;
   final String label;
   final VoidCallback? onPressed;
@@ -253,28 +334,236 @@ class GlassButton extends StatelessWidget {
     this.tint = ac,
     this.strength = .62,
   });
+  @override
+  State<GlassButton> createState() => _GlassButtonState();
+}
+
+class _GlassButtonState extends State<GlassButton> with SingleTickerProviderStateMixin {
+  late final AnimationController c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 400),
+    reverseDuration: const Duration(milliseconds: 500),
+  );
+  late final Animation<double> p = CurvedAnimation(
+    parent: c,
+    curve: const Cubic(.25, 1, .5, 1),
+    reverseCurve: const Cubic(.25, 1, .5, 1),
+  );
+
+  @override
+  void dispose() {
+    c.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final on = widget.onPressed != null;
     return Opacity(
-      opacity: onPressed == null ? .5 : 1,
-      child: Glass(
-        radius: 40,
-        blur: 10,
-        tint: tint,
-        strength: strength,
-        child: Material(
-          type: MaterialType.transparency,
-          child: InkWell(
-            onTap: onPressed,
-            borderRadius: BorderRadius.circular(40),
-            child: Center(
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                IconTheme(data: const IconThemeData(color: Colors.white, size: 20), child: icon),
-                const SizedBox(width: 8),
-                Text(label,
-                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-              ]),
+      opacity: on ? 1 : .5,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: on ? (_) => c.forward() : null,
+        onTapUp: on ? (_) => c.reverse() : null,
+        onTapCancel: on ? () => c.reverse() : null,
+        onTap: widget.onPressed,
+        child: AnimatedBuilder(
+          animation: p,
+          builder: (_, __) {
+            final v = p.value;
+            final sc = 1 - .025 * v;
+            return Transform(
+              alignment: Alignment.center,
+              transform: Matrix4.identity()
+                ..setEntry(3, 2, .0015)
+                ..rotateX(.30 * v)
+                ..scale(sc, sc, 1.0),
+              child: Glass(
+                radius: 40,
+                blur: 10,
+                tint: widget.tint,
+                strength: widget.strength,
+                full: true,
+                press: v,
+                shine: v,
+                child: Center(
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    IconTheme(data: const IconThemeData(color: Colors.white, size: 20), child: widget.icon),
+                    const SizedBox(width: 8),
+                    Text(widget.label,
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                  ]),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// ---------- NAV MENGAMBANG: pill liquid glass + lensa (shader) ----------
+// Efek lensa = shaders/lens.frag (setara feDisplacementMap di CSS).
+// Kalau shader tidak tersedia / tidak didukung, otomatis jatuh ke blur biasa.
+ui.FragmentProgram? lensProgram;
+
+class GlassNav extends StatefulWidget {
+  final int index;
+  final ValueChanged<int> onTap;
+  const GlassNav({super.key, required this.index, required this.onTap});
+  @override
+  State<GlassNav> createState() => _GlassNavState();
+}
+
+class _GlassNavState extends State<GlassNav> with SingleTickerProviderStateMixin {
+  static const _icons = [Icons.home_outlined, Icons.chat_bubble_outline, Icons.person_outline];
+  static const _fill = [Icons.home_rounded, Icons.chat_bubble_rounded, Icons.person_rounded];
+  static const _labels = ['Home', 'Chat', 'Profile'];
+  static const _w = 244.0, _h = 70.0, _pad = 4.0;
+  static const _ease = Cubic(1, 0, .4, 1);
+
+  late final AnimationController c = AnimationController(vsync: this, duration: const Duration(milliseconds: 440));
+  late int toPos = widget.index;
+  late double fromPos = widget.index.toDouble();
+  int? down;
+  ui.FragmentShader? sh;
+
+  @override
+  void initState() {
+    super.initState();
+    c.value = 1;
+    try {
+      sh = lensProgram?.fragmentShader();
+    } catch (_) {
+      sh = null;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant GlassNav old) {
+    super.didUpdateWidget(old);
+    if (old.index != widget.index) {
+      fromPos = _pos;
+      toPos = widget.index;
+      c.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    c.dispose();
+    sh?.dispose();
+    super.dispose();
+  }
+
+  double get _pos => fromPos + (toPos - fromPos) * _ease.transform(c.value);
+
+  ImageFilter _filter(double dpr) {
+    final blur = ImageFilter.blur(sigmaX: 6, sigmaY: 6);
+    final s = sh;
+    if (s == null) return blur;
+    try {
+      s.setFloat(0, _w * dpr); // uSize.x
+      s.setFloat(1, _h * dpr); // uSize.y
+      s.setFloat(2, 22 * dpr); // uEdge: lebar zona lengkung di tepi
+      s.setFloat(3, 16 * dpr); // uStrength: kuat pembelokan
+      s.setFloat(4, 1.6 * dpr); // uAberr: pelangi tipis di tepi
+      return ImageFilter.compose(outer: ImageFilter.shader(s), inner: blur);
+    } catch (_) {
+      return blur;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final slot = (_w - _pad * 2) / 3;
+    return Padding(
+      padding: EdgeInsets.only(bottom: 12 + mq.viewPadding.bottom),
+      child: Align(
+        heightFactor: 1,
+        child: SizedBox(
+          width: _w,
+          height: _h,
+          child: CustomPaint(
+            painter: const _ShadowPainter(_h / 2),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(_h / 2),
+              child: BackdropFilter(
+                filter: _filter(mq.devicePixelRatio),
+                child: CustomPaint(
+                  foregroundPainter: const _SkinPainter(radius: _h / 2, light: 1.1, dark: 1.8, rimWidth: 0),
+                  child: Container(
+                    color: const Color(0xFFBBBBBC).withOpacity(.12),
+                    child: Stack(children: [
+                      // indikator: pill kaca yang geser + melar searah gerakan
+                      AnimatedBuilder(
+                        animation: c,
+                        builder: (_, __) {
+                          final right = toPos >= fromPos;
+                          final far = (toPos - fromPos).abs() >= 2;
+                          final sx = 1 + (far ? .2 : .1) * math.sin(math.pi * c.value);
+                          return Positioned(
+                            left: _pad + _pos * slot,
+                            top: _pad,
+                            width: slot,
+                            height: _h - _pad * 2,
+                            child: Transform.scale(
+                              scaleX: sx,
+                              alignment: right ? Alignment.centerLeft : Alignment.centerRight,
+                              child: CustomPaint(
+                                foregroundPainter: const _SkinPainter(
+                                    radius: (_h - _pad * 2) / 2, indicator: true, light: 1.1, dark: 1.3, rimWidth: 0),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(_h),
+                                    color: const Color(0xFFBBBBBC).withOpacity(.30),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(_pad),
+                        child: Row(children: [
+                          for (var i = 0; i < 3; i++)
+                            Expanded(
+                              child: Semantics(
+                                label: _labels[i],
+                                button: true,
+                                selected: widget.index == i,
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTapDown: (_) => setState(() => down = i),
+                                  onTapUp: (_) => setState(() => down = null),
+                                  onTapCancel: () => setState(() => down = null),
+                                  onTap: () => widget.onTap(i),
+                                  child: Center(
+                                    child: AnimatedScale(
+                                      scale: (down == i && widget.index != i) ? 1.2 : 1,
+                                      duration: const Duration(milliseconds: 200),
+                                      curve: const Cubic(.5, 0, 0, 1),
+                                      child: Icon(
+                                        widget.index == i ? _fill[i] : _icons[i],
+                                        size: 28,
+                                        color: (down == i && widget.index != i)
+                                            ? ac
+                                            : Colors.white.withOpacity(widget.index == i ? 1 : .78),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ]),
+                      ),
+                    ]),
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -283,113 +572,15 @@ class GlassButton extends StatelessWidget {
   }
 }
 
-// ---------- NAV MENGAMBANG: bar kaca + lensa pembesar (RawMagnifier) ----------
-class GlassNav extends StatelessWidget {
-  final int index;
-  final ValueChanged<int> onTap;
-  const GlassNav({super.key, required this.index, required this.onTap});
-
-  static const _icons = [Icons.home_outlined, Icons.chat_bubble_outline, Icons.person_outline];
-  static const _fill = [Icons.home_rounded, Icons.chat_bubble_rounded, Icons.person_rounded];
-  static const _labels = ['Home', 'Chat', 'Profile'];
-  static const _barH = 68.0;
-  static const _over = 5.0; // lensa lebih tinggi dari bar
-  static const _side = 2.0; // dan sedikit lebih lebar dari slotnya
-
-  @override
-  Widget build(BuildContext context) {
-    final bottom = MediaQuery.of(context).viewPadding.bottom;
-    const lensH = _barH + _over * 2;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(28, 0, 28, 12 + bottom),
-      child: SizedBox(
-        height: _barH,
-        child: LayoutBuilder(builder: (context, c) {
-          final slot = c.maxWidth / 3;
-          final lensW = slot + _side * 2;
-          return Stack(clipBehavior: Clip.none, children: [
-            // 1) bar kaca
-            const Positioned.fill(
-              child: Glass(radius: 34, blur: 16, tint: Colors.white, strength: .16, child: SizedBox.expand()),
-            ),
-            // 2) ikon & label (di bawah lensa, jadi ikut diperbesar)
-            Positioned.fill(
-              child: Row(children: [
-                for (var i = 0; i < 3; i++)
-                  Expanded(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => onTap(i),
-                      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        Icon(index == i ? _fill[i] : _icons[i],
-                            size: 24, color: index == i ? Colors.white : Colors.white70),
-                        const SizedBox(height: 2),
-                        Text(_labels[i],
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: index == i ? Colors.white : Colors.white70)),
-                      ]),
-                    ),
-                  ),
-              ]),
-            ),
-            // 3) lensa liquid glass: memperbesar apa yang ada di bawahnya
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 480),
-              curve: Curves.easeOutBack,
-              left: index * slot - _side,
-              top: -_over,
-              width: lensW,
-              height: lensH,
-              child: IgnorePointer(
-                child: Stack(children: [
-                  Positioned.fill(
-                    child: RawMagnifier(
-                      size: Size(lensW, lensH),
-                      magnificationScale: 1.15,
-                      focalPointOffset: Offset.zero,
-                      decoration: MagnifierDecoration(
-                        shape: const StadiumBorder(),
-                        shadows: [
-                          BoxShadow(color: Colors.black.withOpacity(.20), blurRadius: 18, offset: const Offset(0, 8)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Positioned.fill(
-                    child: CustomPaint(
-                      foregroundPainter: const _RimPainter(radius: lensH / 2, width: 1.8),
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(lensH / 2),
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.white.withOpacity(.26),
-                              Colors.white.withOpacity(.05),
-                              Colors.white.withOpacity(.12),
-                            ],
-                            stops: const [0, .5, 1],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ]),
-              ),
-            ),
-          ]);
-        }),
-      ),
-    );
-  }
-}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Supabase.initialize(url: supaUrl, anonKey: supaKey);
+  try {
+    lensProgram = await ui.FragmentProgram.fromAsset('shaders/lens.frag');
+  } catch (_) {
+    lensProgram = null; // fallback: blur biasa
+  }
   runApp(MaterialApp(
     title: 'NnevApp',
     debugShowCheckedModeBanner: false,
@@ -2734,7 +2925,7 @@ class GroupProfilePage extends StatelessWidget {
               const SizedBox(height: 6),
               const Text('Grup umum', style: TextStyle(color: Colors.white70)),
               const SizedBox(height: 28),
-              if (isDev)
+              if (isDev) ...[
                 SizedBox(
                   width: double.infinity,
                   height: 50,
@@ -2744,9 +2935,166 @@ class GroupProfilePage extends StatelessWidget {
                     onPressed: () => changeGroupAvatar(context),
                   ),
                 ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: GlassButton(
+                    icon: const Icon(Icons.auto_delete_outlined),
+                    label: 'Pembersihan chat',
+                    onPressed: () =>
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const ChatCleanupPage())),
+                  ),
+                ),
+              ],
             ]),
           ),
         ),
+      ),
+    ]);
+  }
+}
+
+// =====================================================================
+// PEMBERSIHAN CHAT OTOMATIS (hanya rank developer)
+// Penghapusan dilakukan server (pg_cron) — halaman ini cuma pengaturannya.
+// =====================================================================
+class ChatCleanupPage extends StatefulWidget {
+  const ChatCleanupPage({super.key});
+  @override
+  State<ChatCleanupPage> createState() => _ChatCleanupPageState();
+}
+
+class _ChatCleanupPageState extends State<ChatCleanupPage> {
+  static const _units = {'hour': 'Jam', 'day': 'Hari', 'month': 'Bulan'};
+  bool loading = true, saving = false, enabled = false;
+  String unit = 'day';
+  final vc = TextEditingController(text: '7');
+
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  @override
+  void dispose() {
+    vc.dispose();
+    super.dispose();
+  }
+
+  void snack(String t) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t)));
+  }
+
+  Future<void> load() async {
+    try {
+      final r = await sb
+          .from('group_settings')
+          .select('cleanup_enabled, cleanup_value, cleanup_unit')
+          .eq('id', 'main')
+          .maybeSingle();
+      if (r != null) {
+        enabled = r['cleanup_enabled'] == true;
+        vc.text = '${r['cleanup_value'] ?? 7}';
+        final u = r['cleanup_unit'];
+        if (u is String && _units.containsKey(u)) unit = u;
+      }
+    } catch (e) {
+      snack('Gagal memuat pengaturan: $e');
+    }
+    if (mounted) setState(() => loading = false);
+  }
+
+  Future<void> save() async {
+    final v = int.tryParse(vc.text.trim());
+    if (v == null || v < 1) {
+      snack('Isi angka minimal 1');
+      return;
+    }
+    setState(() => saving = true);
+    try {
+      await sb.rpc('set_chat_cleanup', params: {'p_enabled': enabled, 'p_value': v, 'p_unit': unit});
+      snack('Pengaturan tersimpan');
+    } catch (e) {
+      snack('Gagal menyimpan: $e');
+    }
+    if (mounted) setState(() => saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(children: [
+      const Positioned.fill(child: OceanBg()),
+      Positioned.fill(child: ColoredBox(color: Colors.black.withOpacity(kScrim))),
+      Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          title: const Text('Pembersihan chat'),
+        ),
+        body: loading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
+                glassBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: enabled,
+                    onChanged: (v) => setState(() => enabled = v),
+                    title: const Text('Hapus pesan lama otomatis', style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('Hapus pesan yang lebih lama dari:', style: TextStyle(color: Colors.white70)),
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    SizedBox(
+                      width: 90,
+                      child: TextField(
+                        controller: vc,
+                        enabled: enabled,
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          filled: true,
+                          fillColor: bg.withOpacity(.5),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: line)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Wrap(spacing: 8, children: [
+                        for (final e in _units.entries)
+                          ChoiceChip(
+                            label: Text(e.value),
+                            selected: unit == e.key,
+                            onSelected: enabled ? (_) => setState(() => unit = e.key) : null,
+                          ),
+                      ]),
+                    ),
+                  ]),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Pesan yang disematkan tidak ikut terhapus. Server mengecek tiap jam, jadi penghapusan bisa terlambat sampai 1 jam.',
+                    style: TextStyle(color: mu, fontSize: 12.5),
+                  ),
+                ])),
+                SizedBox(
+                  height: 50,
+                  child: GlassButton(
+                    icon: saving
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.save_outlined),
+                    label: 'Simpan',
+                    onPressed: saving ? null : save,
+                  ),
+                ),
+              ]),
       ),
     ]);
   }
