@@ -345,9 +345,12 @@ class _HomeState extends State<Home> {
             );
           }
           final me = rows.first;
+          final exp = me['expires_at'];
+          if (exp != null && DateTime.parse(exp as String).isBefore(DateTime.now().toUtc())) {
+            WidgetsBinding.instance.addPostFrameCallback((_) => sb.auth.signOut());
+            return const Scaffold(body: Center(child: Text('Masa aktif akun kamu sudah habis')));
+          }
           final pages = [
-            ProfilePage(me: me),
-            const RankPage(),
             UpdatePage(
               cur: cur,
               cfg: cfg,
@@ -360,19 +363,23 @@ class _HomeState extends State<Home> {
                 }
               },
             ),
+            const SizedBox(),
+            ProfilePage(me: me),
           ];
           return Scaffold(
             body: SafeArea(
-              child: ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 20), children: [pages[tab]]),
+              child: tab == 1
+                  ? ChatPage(me: me)
+                  : ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 20), children: [pages[tab]]),
             ),
             bottomNavigationBar: NavigationBar(
               backgroundColor: card,
               selectedIndex: tab,
               onDestinationSelected: (i) => setState(() => tab = i),
               destinations: const [
-                NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Profil'),
-                NavigationDestination(icon: Icon(Icons.list), label: 'Rank'),
-                NavigationDestination(icon: Icon(Icons.download_outlined), label: 'Update'),
+                NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
+                NavigationDestination(icon: Icon(Icons.chat_bubble_outline), label: 'Chat'),
+                NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
               ],
             ),
           );
@@ -401,7 +408,9 @@ class ProfilePage extends StatelessWidget {
         const SizedBox(height: 14),
         RankText(name, rank, size: 28),
         const SizedBox(height: 10),
-        Container(
+        GestureDetector(
+          onTap: () => showRankList(context),
+          child: Container(
           padding: const EdgeInsets.fromLTRB(10, 5, 14, 5),
           decoration: BoxDecoration(
               color: bg, borderRadius: BorderRadius.circular(99), border: Border.all(color: line)),
@@ -410,15 +419,39 @@ class ProfilePage extends StatelessWidget {
             const SizedBox(width: 6),
             RankText(r.name, rank, size: 13),
           ]),
-        ),
+        )),
         const SizedBox(height: 8),
       ])),
       box(Column(children: [
         infoRow(Icons.badge_outlined, 'Username', Text(name, style: const TextStyle(fontWeight: FontWeight.w700))),
-        infoRow(r.icon, 'Rank', Text(r.name, style: const TextStyle(fontWeight: FontWeight.w700))),
+        InkWell(
+          onTap: () => showRankList(context),
+          child: infoRow(r.icon, 'Rank', Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(r.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+            const Icon(Icons.chevron_right, size: 18, color: mu),
+          ])),
+        ),
+        infoRow(Icons.timer_outlined, 'Masa aktif',
+            Text(me['expires_at'] == null ? 'Lifetime' : (me['expires_at'] as String).substring(0, 10),
+                style: const TextStyle(fontWeight: FontWeight.w700))),
         infoRow(Icons.calendar_today_outlined, 'Bergabung',
             Text((me['created_at'] as String).substring(0, 10), style: const TextStyle(fontWeight: FontWeight.w700))),
       ])),
+      if (rank == 'developer' || rank == 'helper') ...[
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: FilledButton.icon(
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ManageUsersPage())),
+            icon: const Icon(Icons.group_add_outlined),
+            label: const Text('Kelola User'),
+            style: FilledButton.styleFrom(
+                backgroundColor: ac,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+          ),
+        ),
+        const SizedBox(height: 10),
+      ],
       SizedBox(
         width: double.infinity,
         height: 48,
@@ -466,7 +499,7 @@ class UpdatePage extends StatelessWidget {
   const UpdatePage({super.key, required this.cur, required this.cfg, required this.onCheck});
   @override
   Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Pembaruan', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        const Text('Home', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
         const SizedBox(height: 14),
         box(Column(children: [
           infoRow(Icons.sell_outlined, 'Build terpasang', Text('$cur', style: const TextStyle(fontWeight: FontWeight.w700))),
@@ -602,5 +635,501 @@ class _UpdateDialogState extends State<UpdateDialog> {
             ]),
           ),
         ),
+      );
+}
+
+// ---------- HELPER ----------
+void snack(BuildContext c, String m) =>
+    ScaffoldMessenger.of(c).showSnackBar(SnackBar(content: Text(m)));
+
+void showRankList(BuildContext c) => showModalBottomSheet(
+      context: c,
+      backgroundColor: bg,
+      isScrollControlled: true,
+      builder: (_) => const Padding(
+        padding: EdgeInsets.all(18),
+        child: SingleChildScrollView(child: RankPage()),
+      ),
+    );
+
+Widget avatar(String rank, {double s = 34}) {
+  final r = ranks[rank] ?? ranks['user']!;
+  return Container(
+    width: s,
+    height: s,
+    decoration: BoxDecoration(shape: BoxShape.circle, color: card, border: Border.all(color: line)),
+    child: Icon(r.icon, size: s * .5, color: r.solid),
+  );
+}
+
+// ---------- CHAT ----------
+class ChatPage extends StatefulWidget {
+  final Map<String, dynamic> me;
+  const ChatPage({super.key, required this.me});
+  @override
+  State<ChatPage> createState() => _ChatPageState();
+}
+
+class _ChatPageState extends State<ChatPage> {
+  final ctl = TextEditingController();
+  List<Map<String, dynamic>> msgs = [], reacts = [];
+  Map<String, Map<String, dynamic>> profs = {};
+  final subs = <StreamSubscription>[];
+
+  @override
+  void initState() {
+    super.initState();
+    subs.add(sb.from('profiles').stream(primaryKey: ['id']).listen((r) {
+      if (mounted) setState(() => profs = {for (final p in r) p['id'] as String: p});
+    }));
+    subs.add(sb
+        .from('messages')
+        .stream(primaryKey: ['id'])
+        .order('created_at', ascending: false)
+        .limit(100)
+        .listen((r) {
+      if (mounted) setState(() => msgs = r);
+    }));
+    subs.add(sb.from('reactions').stream(primaryKey: ['message_id', 'user_id']).listen((r) {
+      if (mounted) setState(() => reacts = r);
+    }));
+  }
+
+  @override
+  void dispose() {
+    for (final s in subs) {
+      s.cancel();
+    }
+    ctl.dispose();
+    super.dispose();
+  }
+
+  Future<void> send() async {
+    final t = ctl.text.trim();
+    if (t.isEmpty) return;
+    ctl.clear();
+    try {
+      await sb.from('messages').insert({'body': t});
+    } catch (_) {
+      if (mounted) snack(context, 'Gagal mengirim pesan');
+    }
+  }
+
+  Future<void> react(String mid, String emoji) async {
+    final uid = sb.auth.currentUser!.id;
+    final mine = reacts.where((x) => x['message_id'] == mid && x['user_id'] == uid).toList();
+    try {
+      if (mine.isEmpty) {
+        await sb.from('reactions').insert({'message_id': mid, 'emoji': emoji});
+      } else if (mine.first['emoji'] == emoji) {
+        await sb.from('reactions').delete().match({'message_id': mid, 'user_id': uid});
+      } else {
+        await sb.from('reactions').update({'emoji': emoji}).match({'message_id': mid, 'user_id': uid});
+      }
+    } catch (_) {}
+  }
+
+  void pick(Map<String, dynamic> m, bool mine) {
+    final id = m['id'] as String;
+    final staff = widget.me['rank'] == 'developer' || widget.me['rank'] == 'helper';
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: card,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: ['👍', '❤️', '😂', '😮', '😢', '🙏']
+                  .map((e) => InkWell(
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          react(id, e);
+                        },
+                        child: Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Text(e, style: const TextStyle(fontSize: 28))),
+                      ))
+                  .toList(),
+            ),
+            if (mine || staff)
+              TextButton.icon(
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  await sb.from('messages').delete().eq('id', id);
+                },
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Hapus pesan'),
+              ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget bubble(int i, String uid) {
+    final m = msgs[i];
+    final sid = m['user_id'] as String;
+    final mine = sid == uid;
+    final p = profs[sid];
+    final rank = (p?['rank'] ?? 'user') as String;
+    final name = (p?['username'] ?? '?') as String;
+    final first = i == msgs.length - 1 || msgs[i + 1]['user_id'] != sid;
+    final t = DateTime.parse(m['created_at'] as String).toLocal();
+    final time = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    final id = m['id'] as String;
+    final counts = <String, int>{};
+    String? my;
+    for (final x in reacts.where((x) => x['message_id'] == id)) {
+      final e = x['emoji'] as String;
+      counts[e] = (counts[e] ?? 0) + 1;
+      if (x['user_id'] == uid) my = e;
+    }
+    final content = GestureDetector(
+      onLongPress: () => pick(m, mine),
+      child: Container(
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * .72),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+        decoration: BoxDecoration(
+          color: mine ? const Color(0xFF144D37) : card,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: mine ? Colors.transparent : line),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          if (!mine && first) ...[RankText(name, rank, size: 13), const SizedBox(height: 2)],
+          Text(m['body'] as String, style: const TextStyle(fontSize: 15)),
+          const SizedBox(height: 2),
+          Align(alignment: Alignment.centerRight, child: Text(time, style: const TextStyle(color: mu, fontSize: 10))),
+        ]),
+      ),
+    );
+    final chips = counts.isEmpty
+        ? const SizedBox.shrink()
+        : Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Wrap(
+              spacing: 4,
+              children: counts.entries
+                  .map((e) => GestureDetector(
+                        onTap: () => react(id, e.key),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: e.key == my ? ac.withOpacity(.25) : card,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: e.key == my ? ac : line),
+                          ),
+                          child: Text('${e.key} ${e.value}', style: const TextStyle(fontSize: 12)),
+                        ),
+                      ))
+                  .toList(),
+            ),
+          );
+    final col = Column(
+      crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      children: [content, chips],
+    );
+    return Padding(
+      padding: EdgeInsets.only(top: first ? 10 : 2),
+      child: Row(
+        mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: mine
+            ? [col]
+            : [first ? avatar(rank) : const SizedBox(width: 34), const SizedBox(width: 6), col],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = sb.auth.currentUser!.id;
+    return Column(children: [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: const BoxDecoration(color: card, border: Border(bottom: BorderSide(color: line))),
+        child: const Text('Chat Umum', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+      ),
+      Expanded(
+        child: msgs.isEmpty
+            ? const Center(child: Text('Belum ada pesan. Mulai obrolan!', style: TextStyle(color: mu)))
+            : ListView.builder(
+                reverse: true,
+                padding: const EdgeInsets.all(12),
+                itemCount: msgs.length,
+                itemBuilder: (_, i) => bubble(i, uid),
+              ),
+      ),
+      Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        color: card,
+        child: Row(children: [
+          Expanded(
+            child: TextField(
+              controller: ctl,
+              minLines: 1,
+              maxLines: 4,
+              maxLength: 1000,
+              buildCounter: (_, {required currentLength, required isFocused, maxLength}) => null,
+              decoration: InputDecoration(
+                hintText: 'Tulis pesan...',
+                filled: true,
+                fillColor: bg,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(colors: [Color(0xFF6C7BFF), Color(0xFF9400FF)]),
+            ),
+            child: IconButton(onPressed: send, icon: const Icon(Icons.send, color: Colors.white, size: 20)),
+          ),
+        ]),
+      ),
+    ]);
+  }
+}
+
+// ---------- KELOLA USER (Developer & Helper) ----------
+class DurationPicker extends StatefulWidget {
+  final bool allowKeep;
+  final ValueChanged<int?> onChanged; // null = lifetime, -1 = tidak diubah / belum diisi
+  const DurationPicker({super.key, required this.onChanged, this.allowKeep = false});
+  @override
+  State<DurationPicker> createState() => _DurationPickerState();
+}
+
+class _DurationPickerState extends State<DurationPicker> {
+  late String sel = widget.allowKeep ? 'keep' : 'life';
+  final c = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.onChanged(widget.allowKeep ? -1 : null);
+  }
+
+  Widget opt(String key, String label, int? d) => ChoiceChip(
+        label: Text(label),
+        selected: sel == key,
+        onSelected: (_) {
+          setState(() => sel = key);
+          widget.onChanged(d);
+        },
+      );
+
+  @override
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 6, children: [
+          if (widget.allowKeep) opt('keep', 'Tetap', -1),
+          opt('life', 'Lifetime', null),
+          opt('7', '7 hari', 7),
+          opt('30', '30 hari', 30),
+          opt('90', '90 hari', 90),
+          ChoiceChip(
+            label: const Text('Custom'),
+            selected: sel == 'custom',
+            onSelected: (_) {
+              setState(() => sel = 'custom');
+              widget.onChanged(int.tryParse(c.text) ?? -1);
+            },
+          ),
+        ]),
+        if (sel == 'custom')
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: TextField(
+              controller: c,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Jumlah hari', border: OutlineInputBorder()),
+              onChanged: (v) => widget.onChanged(int.tryParse(v) ?? -1),
+            ),
+          ),
+      ]);
+}
+
+class ManageUsersPage extends StatefulWidget {
+  const ManageUsersPage({super.key});
+  @override
+  State<ManageUsersPage> createState() => _ManageUsersPageState();
+}
+
+class _ManageUsersPageState extends State<ManageUsersPage> {
+  final un = TextEditingController(), pw = TextEditingController();
+  String rank = 'user';
+  int? days;
+  bool busy = false;
+  List<Map<String, dynamic>> users = [];
+  StreamSubscription? sub;
+
+  @override
+  void initState() {
+    super.initState();
+    sub = sb.from('profiles').stream(primaryKey: ['id']).order('created_at').listen((r) {
+      if (mounted) setState(() => users = r);
+    });
+  }
+
+  @override
+  void dispose() {
+    sub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> create() async {
+    if (days == -1) {
+      snack(context, 'Isi jumlah hari dulu');
+      return;
+    }
+    setState(() => busy = true);
+    try {
+      await sb.rpc('create_user', params: {
+        'p_username': un.text.trim(),
+        'p_password': pw.text,
+        'p_rank': rank,
+        'p_days': days,
+      });
+      un.clear();
+      pw.clear();
+      if (mounted) snack(context, 'Akun berhasil dibuat');
+    } on PostgrestException catch (e) {
+      if (mounted) snack(context, e.message);
+    } catch (_) {
+      if (mounted) snack(context, 'Gagal membuat akun');
+    }
+    if (mounted) setState(() => busy = false);
+  }
+
+  Widget rankChips(String sel, void Function(String) on) => Wrap(
+        spacing: 6,
+        children: ranks.entries
+            .map((e) => ChoiceChip(
+                  avatar: Icon(e.value.icon, size: 16, color: e.value.solid),
+                  label: Text(e.value.name),
+                  selected: sel == e.key,
+                  onSelected: (_) => on(e.key),
+                ))
+            .toList(),
+      );
+
+  void edit(Map<String, dynamic> u) {
+    var r = u['rank'] as String;
+    int? d = -1;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: card,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, ss) => Padding(
+          padding: EdgeInsets.fromLTRB(18, 18, 18, 18 + MediaQuery.of(ctx).viewInsets.bottom),
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(u['username'] as String, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 14),
+              const Text('Rank', style: TextStyle(color: mu)),
+              const SizedBox(height: 6),
+              rankChips(r, (v) => ss(() => r = v)),
+              const SizedBox(height: 14),
+              const Text('Masa aktif', style: TextStyle(color: mu)),
+              const SizedBox(height: 6),
+              DurationPicker(allowKeep: true, onChanged: (v) => d = v),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () async {
+                    final upd = <String, dynamic>{'rank': r};
+                    if (d != -1) {
+                      upd['expires_at'] =
+                          d == null ? null : DateTime.now().toUtc().add(Duration(days: d!)).toIso8601String();
+                    }
+                    try {
+                      await sb.from('profiles').update(upd).eq('id', u['id'] as String);
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    } catch (_) {
+                      if (ctx.mounted) snack(ctx, 'Gagal menyimpan');
+                    }
+                  },
+                  child: const Text('Simpan'),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('Kelola User'), backgroundColor: card),
+        body: ListView(padding: const EdgeInsets.all(18), children: [
+          box(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Tambah user', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 14),
+            TextField(
+                controller: un,
+                autocorrect: false,
+                decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder())),
+            const SizedBox(height: 10),
+            TextField(
+                controller: pw,
+                decoration: const InputDecoration(labelText: 'Password (min 6)', border: OutlineInputBorder())),
+            const SizedBox(height: 14),
+            const Text('Rank', style: TextStyle(color: mu)),
+            const SizedBox(height: 6),
+            rankChips(rank, (v) => setState(() => rank = v)),
+            const SizedBox(height: 14),
+            const Text('Masa aktif', style: TextStyle(color: mu)),
+            const SizedBox(height: 6),
+            DurationPicker(onChanged: (v) => days = v),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: FilledButton.icon(
+                onPressed: busy ? null : create,
+                icon: const Icon(Icons.person_add_alt),
+                label: const Text('Buat akun'),
+              ),
+            ),
+          ])),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6),
+            child: Text('Daftar user', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ),
+          box(Column(
+            children: users.map((u) {
+              final rk = u['rank'] as String;
+              final exp = u['expires_at'];
+              return InkWell(
+                onTap: () => edit(u),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(children: [
+                    avatar(rk),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        RankText(u['username'] as String, rk),
+                        Text(
+                          '${(ranks[rk] ?? ranks['user']!).name} · ${exp == null ? 'Lifetime' : 's/d ${(exp as String).substring(0, 10)}'}',
+                          style: const TextStyle(color: mu, fontSize: 12),
+                        ),
+                      ]),
+                    ),
+                    const Icon(Icons.edit_outlined, size: 18, color: mu),
+                  ]),
+                ),
+              );
+            }).toList(),
+          )),
+        ]),
       );
 }
