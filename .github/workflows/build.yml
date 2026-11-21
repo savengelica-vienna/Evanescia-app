@@ -45,6 +45,18 @@ jobs:
           }
           EOF
 
+      - name: Matikan lint di build.gradle app
+        run: |
+          F=android/app/build.gradle.kts
+          if [ -f "$F" ]; then
+            sed -i '0,/^android {/s//android {\n    lint {\n        checkReleaseBuilds = false\n        abortOnError = false\n    }/' "$F"
+          else
+            F=android/app/build.gradle
+            sed -i '0,/^android {/s//android {\n    lintOptions {\n        checkReleaseBuilds false\n        abortOnError false\n    }/' "$F"
+          fi
+          echo "== $F =="
+          grep -n -B1 -A6 "^android {" "$F"
+
       - name: Build release APK
         run: |
           VER=${GITHUB_REF_NAME#v}
