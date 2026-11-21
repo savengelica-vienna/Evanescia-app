@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -17,6 +19,175 @@ const mu = Color(0xFF7C88A8);
 const ac = Color(0xFF6C7BFF);
 
 final sb = Supabase.instance.client;
+
+// Gelapkan background utama supaya teks tetap terbaca. 0 = tanpa lapisan gelap.
+const kScrim = 0.28;
+
+const rankOrder = ['user', 'member', 'premium', 'admin', 'helper', 'developer'];
+int lv(String? r) {
+  final i = rankOrder.indexOf(r ?? 'user');
+  return i < 0 ? 0 : i;
+}
+
+const chatGrad = LinearGradient(
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+  colors: [Color(0xFFD9FDD3), Color(0xFF25D366), Color(0xFFA7F3D0)],
+);
+
+String chatTime(String iso) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  final t = DateTime.parse(iso).toLocal();
+  final n = DateTime.now();
+  if (t.year == n.year && t.month == n.month && t.day == n.day) {
+    return '${two(t.hour)}:${two(t.minute)}';
+  }
+  final y = n.subtract(const Duration(days: 1));
+  if (t.year == y.year && t.month == y.month && t.day == y.day) return 'Kemarin';
+  return '${two(t.day)}/${two(t.month)}/${two(t.year % 100)}';
+}
+
+// ---------- BACKGROUND ANIMASI (oceanic) ----------
+class _Pan extends GradientTransform {
+  final double dx, dy;
+  const _Pan(this.dx, this.dy);
+  @override
+  Matrix4? transform(Rect bounds, {TextDirection? textDirection}) =>
+      Matrix4.translationValues(dx * bounds.width, dy * bounds.height, 0);
+}
+
+class OceanBg extends StatefulWidget {
+  const OceanBg({super.key});
+  @override
+  State<OceanBg> createState() => _OceanBgState();
+}
+
+class _OceanBgState extends State<OceanBg> with SingleTickerProviderStateMixin {
+  late final AnimationController c =
+      AnimationController(vsync: this, duration: const Duration(seconds: 12))..repeat();
+  static const pts = [Offset(0, .5), Offset(.5, 1), Offset(1, .5), Offset(.5, 0), Offset(0, .5)];
+  late final Animation<Offset> pos = TweenSequence<Offset>([
+    for (var i = 0; i < 4; i++)
+      TweenSequenceItem<Offset>(
+        tween: Tween<Offset>(begin: pts[i], end: pts[i + 1]).chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 1,
+      ),
+  ]).animate(c);
+
+  @override
+  void dispose() {
+    c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+        child: AnimatedBuilder(
+          animation: pos,
+          builder: (_, __) => DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: const Alignment(-1, -1),
+                end: const Alignment(7, 7),
+                colors: const [
+                  Color(0xFF003B73),
+                  Color(0xFF0077B6),
+                  Color(0xFF00B4D8),
+                  Color(0xFF48CAE4),
+                  Color(0xFF90E0EF),
+                  Color(0xFFCAF0F8),
+                  Color(0xFF003B73),
+                ],
+                transform: _Pan(-pos.value.dx * 3, -pos.value.dy * 3),
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+// ---------- NAV MENGAMBANG (liquid glass) ----------
+class GlassNav extends StatelessWidget {
+  final int index;
+  final ValueChanged<int> onTap;
+  const GlassNav({super.key, required this.index, required this.onTap});
+
+  static const _icons = [Icons.home_outlined, Icons.chat_bubble_outline, Icons.person_outline];
+  static const _fill = [Icons.home_rounded, Icons.chat_bubble_rounded, Icons.person_rounded];
+  static const _labels = ['Home', 'Chat', 'Profile'];
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).viewPadding.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(28, 0, 28, 12 + bottom),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(34),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: Container(
+            height: 68,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(34),
+              border: Border.all(color: Colors.white.withOpacity(.30)),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Colors.white.withOpacity(.22), Colors.white.withOpacity(.07)],
+              ),
+            ),
+            child: Stack(children: [
+              AnimatedAlign(
+                duration: const Duration(milliseconds: 380),
+                curve: Curves.easeOutBack,
+                alignment: Alignment(index - 1.0, 0),
+                child: FractionallySizedBox(
+                  widthFactor: 1 / 3,
+                  heightFactor: 1,
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(28),
+                        color: Colors.white.withOpacity(.22),
+                        border: Border.all(color: Colors.white.withOpacity(.35)),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                child: Row(children: [
+                  for (var i = 0; i < 3; i++)
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => onTap(i),
+                        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                          AnimatedScale(
+                            scale: index == i ? 1.12 : 1,
+                            duration: const Duration(milliseconds: 250),
+                            child: Icon(index == i ? _fill[i] : _icons[i],
+                                size: 24, color: index == i ? Colors.white : Colors.white70),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(_labels[i],
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: index == i ? Colors.white : Colors.white70)),
+                        ]),
+                      ),
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -350,39 +521,36 @@ class _HomeState extends State<Home> {
             WidgetsBinding.instance.addPostFrameCallback((_) => sb.auth.signOut());
             return const Scaffold(body: Center(child: Text('Masa aktif akun kamu sudah habis')));
           }
-          final pages = [
-            UpdatePage(
-              cur: cur,
-              cfg: cfg,
-              onCheck: () {
-                if (hasUpdate) {
-                  maybePrompt(force: true);
-                } else {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(const SnackBar(content: Text('Sudah versi terbaru')));
-                }
-              },
-            ),
-            const SizedBox(),
-            ProfilePage(me: me),
-          ];
-          return Scaffold(
-            body: SafeArea(
-              child: tab == 1
-                  ? ChatListPage(me: me)
-                  : ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 20), children: [pages[tab]]),
-            ),
-            bottomNavigationBar: NavigationBar(
-              backgroundColor: card,
-              selectedIndex: tab,
-              onDestinationSelected: (i) => setState(() => tab = i),
-              destinations: const [
-                NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
-                NavigationDestination(icon: Icon(Icons.chat_bubble_outline), label: 'Chat'),
-                NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
-              ],
-            ),
+          final updateTab = UpdatePage(
+            cur: cur,
+            cfg: cfg,
+            onCheck: () {
+              if (hasUpdate) {
+                maybePrompt(force: true);
+              } else {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('Sudah versi terbaru')));
+              }
+            },
           );
+          const pad = EdgeInsets.fromLTRB(18, 20, 18, 120);
+          return Stack(children: [
+            const Positioned.fill(child: OceanBg()),
+            Positioned.fill(child: ColoredBox(color: Colors.black.withOpacity(kScrim))),
+            Scaffold(
+              backgroundColor: Colors.transparent,
+              extendBody: true,
+              body: SafeArea(
+                bottom: false,
+                child: IndexedStack(index: tab, children: [
+                  ListView(padding: pad, physics: const BouncingScrollPhysics(), children: [updateTab]),
+                  ChatListPage(me: me),
+                  ListView(padding: pad, physics: const BouncingScrollPhysics(), children: [ProfilePage(me: me)]),
+                ]),
+              ),
+              bottomNavigationBar: GlassNav(index: tab, onTap: (i) => setState(() => tab = i)),
+            ),
+          ]);
         },
       );
 }
@@ -442,7 +610,7 @@ class ProfilePage extends StatelessWidget {
           width: double.infinity,
           height: 48,
           child: FilledButton.icon(
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ManageUsersPage())),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ManageUsersPage(myRank: rank))),
             icon: const Icon(Icons.group_add_outlined),
             label: const Text('Kelola User'),
             style: FilledButton.styleFrom(
@@ -456,7 +624,26 @@ class ProfilePage extends StatelessWidget {
         width: double.infinity,
         height: 48,
         child: OutlinedButton.icon(
-          onPressed: () => sb.auth.signOut(),
+          onPressed: () async {
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: card,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                title: const Text('Keluar dari akun?'),
+                content: const Text('Kamu harus login lagi untuk masuk.'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFFFF4D6D)),
+                    child: const Text('Ya, keluar'),
+                  ),
+                ],
+              ),
+            );
+            if (ok == true) sb.auth.signOut();
+          },
           icon: const Icon(Icons.logout),
           label: const Text('Keluar'),
           style: OutlinedButton.styleFrom(
@@ -673,90 +860,159 @@ class ChatListPage extends StatefulWidget {
 }
 
 class _ChatListPageState extends State<ChatListPage> {
-  List<Map<String, dynamic>> users = [];
-  StreamSubscription? sub;
+  List<Map<String, dynamic>> users = [], msgs = [], hides = [];
+  final subs = <StreamSubscription>[];
 
   @override
   void initState() {
     super.initState();
-    sub = sb.from('profiles').stream(primaryKey: ['id']).order('username').listen((r) {
+    subs.add(sb.from('profiles').stream(primaryKey: ['id']).listen((r) {
       if (mounted) setState(() => users = r);
-    });
+    }));
+    subs.add(sb
+        .from('messages')
+        .stream(primaryKey: ['id'])
+        .order('created_at', ascending: false)
+        .limit(300)
+        .listen((r) {
+      if (mounted) setState(() => msgs = r);
+    }));
+    subs.add(sb.from('message_hides').stream(primaryKey: ['message_id', 'user_id']).listen((r) {
+      if (mounted) setState(() => hides = r);
+    }));
   }
 
   @override
   void dispose() {
-    sub?.cancel();
+    for (final x in subs) {
+      x.cancel();
+    }
     super.dispose();
   }
 
   void open(Map<String, dynamic>? peer) => Navigator.push(
-      context, MaterialPageRoute(builder: (_) => ChatRoomPage(me: widget.me, peer: peer)));
+      context, CupertinoPageRoute(builder: (_) => ChatRoomPage(me: widget.me, peer: peer)));
+
+  Widget convRow({
+    required Widget leading,
+    required Widget title,
+    required String preview,
+    String? time,
+    required VoidCallback onTap,
+  }) =>
+      InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 11),
+          child: Row(children: [
+            leading,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(child: title),
+                  if (time != null) Text(time, style: const TextStyle(color: mu, fontSize: 12)),
+                ]),
+                const SizedBox(height: 3),
+                Text(preview,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: mu, fontSize: 14)),
+              ]),
+            ),
+          ]),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
     final myId = sb.auth.currentUser!.id;
-    final others = users.where((u) => u['id'] != myId).toList();
-    return ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 20), children: [
-      const Text('Chat', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-      const SizedBox(height: 14),
-      InkWell(
-        borderRadius: BorderRadius.circular(18),
+    final hid = {for (final h in hides) h['message_id'] as String};
+    final profs = {for (final p in users) p['id'] as String: p};
+
+    Map<String, dynamic>? lastOf(String room) {
+      for (final m in msgs) {
+        if (m['room'] == room && !hid.contains(m['id'])) return m;
+      }
+      return null;
+    }
+
+    String who(Map<String, dynamic> m) =>
+        m['user_id'] == myId ? 'Kamu' : ((profs[m['user_id']]?['username'] ?? '?') as String);
+
+    final entries = users
+        .where((u) => u['id'] != myId)
+        .map((u) => MapEntry(u, lastOf(dmRoom(myId, u['id'] as String))))
+        .toList();
+    entries.sort((a, b) {
+      final x = a.value, y = b.value;
+      if (x != null && y != null) return (y['created_at'] as String).compareTo(x['created_at'] as String);
+      if (x != null) return -1;
+      if (y != null) return 1;
+      return (a.key['username'] as String).toLowerCase().compareTo((b.key['username'] as String).toLowerCase());
+    });
+
+    final g = lastOf('main');
+    final items = <Widget>[
+      convRow(
+        leading: Container(
+          width: 52,
+          height: 52,
+          decoration: const BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(colors: [Color(0xFF6C7BFF), Color(0xFF9400FF)]),
+          ),
+          child: const Icon(Icons.groups_outlined, color: Colors.white, size: 26),
+        ),
+        title: const Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        preview: g == null ? 'Belum ada pesan' : '${who(g)}: ${g['body']}',
+        time: g == null ? null : chatTime(g['created_at'] as String),
         onTap: () => open(null),
-        child: box(Row(children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(colors: [Color(0xFF6C7BFF), Color(0xFF9400FF)]),
-            ),
-            child: const Icon(Icons.groups_outlined, color: Colors.white),
-          ),
-          const SizedBox(width: 14),
-          const Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-              Text('Grup untuk semua user', style: TextStyle(color: mu, fontSize: 12)),
-            ]),
-          ),
-          const Icon(Icons.chevron_right, color: mu),
-        ])),
       ),
-      const Padding(
-        padding: EdgeInsets.symmetric(vertical: 6),
-        child: Text('Pesan pribadi', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-      ),
-      if (others.isEmpty)
-        const Padding(
-          padding: EdgeInsets.all(20),
-          child: Center(child: Text('Belum ada user lain', style: TextStyle(color: mu))),
-        )
-      else
-        box(Column(
-          children: others.map((u) {
-            final rk = (u['rank'] ?? 'user') as String;
-            return InkWell(
-              onTap: () => open(u),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(children: [
-                  avatar(rk, s: 42),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      RankText(u['username'] as String, rk),
-                      Text((ranks[rk] ?? ranks['user']!).name,
-                          style: const TextStyle(color: mu, fontSize: 12)),
-                    ]),
-                  ),
-                  const Icon(Icons.chevron_right, color: mu),
-                ]),
-              ),
-            );
-          }).toList(),
-        )),
-    ]);
+      for (final e in entries)
+        convRow(
+          leading: avatar((e.key['rank'] ?? 'user') as String, s: 52),
+          title: Row(children: [
+            Flexible(child: RankText(e.key['username'] as String, (e.key['rank'] ?? 'user') as String, size: 16)),
+            const SizedBox(width: 6),
+            RankText('(${(ranks[e.key['rank']] ?? ranks['user']!).name})', (e.key['rank'] ?? 'user') as String,
+                size: 12),
+          ]),
+          preview: e.value == null
+              ? 'Ketuk untuk mulai chat'
+              : (e.value!['user_id'] == myId ? 'Kamu: ' : '') + (e.value!['body'] as String),
+          time: e.value == null ? null : chatTime(e.value!['created_at'] as String),
+          onTap: () => open(e.key),
+        ),
+    ];
+
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(18, 20, 18, 120),
+      children: [
+        const Text('Chat', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+          decoration: BoxDecoration(
+            color: card.withOpacity(.88),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: line),
+          ),
+          child: Column(children: [
+            for (var i = 0; i < items.length; i++) ...[
+              if (i > 0) const Divider(height: 1, color: line, indent: 66),
+              items[i],
+            ],
+          ]),
+        ),
+        if (entries.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: Text('Belum ada user lain', style: TextStyle(color: Colors.white70))),
+          ),
+      ],
+    );
   }
 }
 
@@ -773,9 +1029,16 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   late final String room = widget.peer == null
       ? 'main'
       : dmRoom(sb.auth.currentUser!.id, widget.peer!['id'] as String);
-  List<Map<String, dynamic>> msgs = [], reacts = [];
+  List<Map<String, dynamic>> msgs = [], reacts = [], vis = [];
   Map<String, Map<String, dynamic>> profs = {};
+  Set<String> hidden = {};
+  final seen = <String>{};
+  bool loaded = false;
   final subs = <StreamSubscription>[];
+
+  bool get isGroup => widget.peer == null;
+  int get myLv => lv((profs[sb.auth.currentUser!.id]?['rank'] ?? widget.me['rank']) as String?);
+  String nameOf(Map<String, dynamic> m) => (profs[m['user_id']]?['username'] ?? '?') as String;
 
   @override
   void initState() {
@@ -790,17 +1053,24 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
         .order('created_at', ascending: false)
         .limit(100)
         .listen((r) {
+      if (!loaded) {
+        seen.addAll(r.map((m) => m['id'] as String));
+        loaded = true;
+      }
       if (mounted) setState(() => msgs = r);
     }));
     subs.add(sb.from('reactions').stream(primaryKey: ['message_id', 'user_id']).listen((r) {
       if (mounted) setState(() => reacts = r);
     }));
+    subs.add(sb.from('message_hides').stream(primaryKey: ['message_id', 'user_id']).listen((r) {
+      if (mounted) setState(() => hidden = {for (final h in r) h['message_id'] as String});
+    }));
   }
 
   @override
   void dispose() {
-    for (final s in subs) {
-      s.cancel();
+    for (final x in subs) {
+      x.cancel();
     }
     ctl.dispose();
     super.dispose();
@@ -831,16 +1101,44 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     } catch (_) {}
   }
 
+  Future<void> hideForMe(String id) async {
+    try {
+      await sb.from('message_hides').insert({'message_id': id});
+    } catch (_) {
+      if (mounted) snack(context, 'Gagal menghapus pesan');
+    }
+  }
+
+  Future<void> deleteAll(String id) async {
+    try {
+      await sb.from('messages').delete().eq('id', id);
+    } catch (_) {
+      if (mounted) snack(context, 'Gagal menghapus pesan');
+    }
+  }
+
+  Future<void> pin(String id, bool v) async {
+    try {
+      await sb.rpc('pin_message', params: {'p_id': id, 'p_pin': v});
+    } on PostgrestException catch (e) {
+      if (mounted) snack(context, e.message);
+    } catch (_) {
+      if (mounted) snack(context, 'Gagal menyematkan pesan');
+    }
+  }
+
   void pick(Map<String, dynamic> m, bool mine) {
     final id = m['id'] as String;
-    final staff = widget.peer == null &&
-        (widget.me['rank'] == 'developer' || widget.me['rank'] == 'helper');
+    final canAll = myLv >= 3 && (isGroup || mine);
+    final canPin = isGroup && myLv >= 2;
+    final pinned = m['pinned_at'] != null;
     showModalBottomSheet(
       context: context,
       backgroundColor: card,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
       builder: (ctx) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -856,14 +1154,32 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
                       ))
                   .toList(),
             ),
-            if (mine || staff)
-              TextButton.icon(
-                onPressed: () async {
+            const SizedBox(height: 6),
+            if (canPin)
+              ListTile(
+                leading: Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined),
+                title: Text(pinned ? 'Lepas sematan' : 'Sematkan pesan'),
+                onTap: () {
                   Navigator.pop(ctx);
-                  await sb.from('messages').delete().eq('id', id);
+                  pin(id, !pinned);
                 },
-                icon: const Icon(Icons.delete_outline),
-                label: const Text('Hapus pesan'),
+              ),
+            ListTile(
+              leading: const Icon(Icons.visibility_off_outlined),
+              title: const Text('Hapus untuk saya'),
+              onTap: () {
+                Navigator.pop(ctx);
+                hideForMe(id);
+              },
+            ),
+            if (canAll)
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Color(0xFFFF6B81)),
+                title: const Text('Hapus untuk semua orang', style: TextStyle(color: Color(0xFFFF6B81))),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  deleteAll(id);
+                },
               ),
           ]),
         ),
@@ -871,17 +1187,53 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     );
   }
 
+  void showPinned(List<Map<String, dynamic>> pins) => showModalBottomSheet(
+        context: context,
+        backgroundColor: card,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Pesan disematkan', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Flexible(
+                child: ListView(shrinkWrap: true, children: [
+                  for (final m in pins)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.push_pin, color: ac, size: 20),
+                      title: Text(nameOf(m), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                      subtitle: Text(m['body'] as String, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      trailing: myLv >= 2
+                          ? IconButton(
+                              icon: const Icon(Icons.close, size: 18, color: mu),
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                pin(m['id'] as String, false);
+                              },
+                            )
+                          : null,
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      );
+
   Widget bubble(int i, String uid) {
-    final m = msgs[i];
+    final m = vis[i];
     final sid = m['user_id'] as String;
     final mine = sid == uid;
     final p = profs[sid];
     final rank = (p?['rank'] ?? 'user') as String;
     final name = (p?['username'] ?? '?') as String;
-    final first = i == msgs.length - 1 || msgs[i + 1]['user_id'] != sid;
+    final first = i == vis.length - 1 || vis[i + 1]['user_id'] != sid;
     final t = DateTime.parse(m['created_at'] as String).toLocal();
     final time = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     final id = m['id'] as String;
+    final pinned = m['pinned_at'] != null;
     final counts = <String, int>{};
     String? my;
     for (final x in reacts.where((x) => x['message_id'] == id)) {
@@ -889,6 +1241,9 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
       counts[e] = (counts[e] ?? 0) + 1;
       if (x['user_id'] == uid) my = e;
     }
+    final isNew = loaded && !seen.contains(id);
+    seen.add(id);
+    const big = Radius.circular(16), small = Radius.circular(4);
     final content = GestureDetector(
       onLongPress: () => pick(m, mine),
       child: Container(
@@ -896,14 +1251,32 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
         decoration: BoxDecoration(
           color: mine ? const Color(0xFF144D37) : card,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.only(
+            topLeft: (!mine && first) ? small : big,
+            topRight: (mine && first) ? small : big,
+            bottomLeft: big,
+            bottomRight: big,
+          ),
           border: Border.all(color: mine ? Colors.transparent : line),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          if (!mine && first) ...[RankText(name, rank, size: 13), const SizedBox(height: 2)],
+          if (!mine && first) ...[
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              RankText(name, rank, size: 13),
+              const SizedBox(width: 5),
+              RankText('(${(ranks[rank] ?? ranks['user']!).name})', rank, size: 10),
+            ]),
+            const SizedBox(height: 2),
+          ],
           Text(m['body'] as String, style: const TextStyle(fontSize: 15)),
           const SizedBox(height: 2),
-          Align(alignment: Alignment.centerRight, child: Text(time, style: const TextStyle(color: mu, fontSize: 10))),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              if (pinned) ...[const Icon(Icons.push_pin, size: 10, color: mu), const SizedBox(width: 3)],
+              Text(time, style: const TextStyle(color: mu, fontSize: 10)),
+            ]),
+          ),
         ]),
       ),
     );
@@ -933,7 +1306,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
       crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       children: [content, chips],
     );
-    return Padding(
+    final row = Padding(
       padding: EdgeInsets.only(top: first ? 10 : 2),
       child: Row(
         mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
@@ -943,58 +1316,67 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
             : [first ? avatar(rank) : const SizedBox(width: 34), const SizedBox(width: 6), col],
       ),
     );
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(id),
+      tween: Tween<double>(begin: isNew ? 0.0 : 1.0, end: 1.0),
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      builder: (_, v, child) => Opacity(
+        opacity: v,
+        child: Transform.translate(offset: Offset((mine ? 24 : -24) * (1 - v), 14 * (1 - v)), child: child),
+      ),
+      child: row,
+    );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final uid = sb.auth.currentUser!.id;
-    final peer = widget.peer;
-    final prk = (peer?['rank'] ?? 'user') as String;
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: card,
-        title: peer == null
-            ? const Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))
-            : Row(children: [
-                avatar(prk, s: 32),
-                const SizedBox(width: 10),
-                RankText(peer['username'] as String, prk, size: 16),
-              ]),
-      ),
-      body: SafeArea(
-        top: false,
-        child: Column(children: [
-      Expanded(
-        child: msgs.isEmpty
-            ? const Center(child: Text('Belum ada pesan. Mulai obrolan!', style: TextStyle(color: mu)))
-            : ListView.builder(
-                reverse: true,
-                padding: const EdgeInsets.all(12),
-                itemCount: msgs.length,
-                itemBuilder: (_, i) => bubble(i, uid),
-              ),
-      ),
-      Container(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-        color: card,
-        child: Row(children: [
+  Widget pinBanner(List<Map<String, dynamic>> pins) => GestureDetector(
+        onTap: () => showPinned(pins),
+        child: Container(
+          width: double.infinity,
+          margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: card.withOpacity(.94),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: line),
+          ),
+          child: Row(children: [
+            const Icon(Icons.push_pin, size: 16, color: ac),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('${nameOf(pins.first)}: ${pins.first['body']}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+            ),
+            if (pins.length > 1) Text('+${pins.length - 1}', style: const TextStyle(color: mu, fontSize: 12)),
+          ]),
+        ),
+      );
+
+  Widget inputBar() => Container(
+        margin: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: card.withOpacity(.96),
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(color: line),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Expanded(
             child: TextField(
               controller: ctl,
               minLines: 1,
               maxLines: 4,
               maxLength: 1000,
+              textCapitalization: TextCapitalization.sentences,
               buildCounter: (_, {required currentLength, required isFocused, maxLength}) => null,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 hintText: 'Tulis pesan...',
-                filled: true,
-                fillColor: bg,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Container(
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
@@ -1003,8 +1385,55 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
             child: IconButton(onPressed: send, icon: const Icon(Icons.send, color: Colors.white, size: 20)),
           ),
         ]),
-      ),
-    ]),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = sb.auth.currentUser!.id;
+    vis = msgs.where((m) => !hidden.contains(m['id'])).toList();
+    final pins = isGroup
+        ? (vis.where((m) => m['pinned_at'] != null).toList()
+          ..sort((a, b) => (b['pinned_at'] as String).compareTo(a['pinned_at'] as String)))
+        : <Map<String, dynamic>>[];
+    final peer = widget.peer;
+    final prk = (peer?['rank'] ?? 'user') as String;
+    return Container(
+      decoration: const BoxDecoration(gradient: chatGrad),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: card,
+          scrolledUnderElevation: 0,
+          title: peer == null
+              ? const Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))
+              : Row(children: [
+                  avatar(prk, s: 32),
+                  const SizedBox(width: 10),
+                  RankText(peer['username'] as String, prk, size: 16),
+                  const SizedBox(width: 6),
+                  RankText('(${(ranks[prk] ?? ranks['user']!).name})', prk, size: 12),
+                ]),
+        ),
+        body: SafeArea(
+          top: false,
+          child: Column(children: [
+            if (pins.isNotEmpty) pinBanner(pins),
+            Expanded(
+              child: vis.isEmpty
+                  ? const Center(
+                      child: Text('Belum ada pesan. Mulai obrolan!',
+                          style: TextStyle(color: Color(0xFF14532D), fontWeight: FontWeight.w600)))
+                  : ListView.builder(
+                      reverse: true,
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.all(12),
+                      itemCount: vis.length,
+                      itemBuilder: (_, i) => bubble(i, uid),
+                    ),
+            ),
+            inputBar(),
+          ]),
+        ),
       ),
     );
   }
@@ -1069,7 +1498,8 @@ class _DurationPickerState extends State<DurationPicker> {
 }
 
 class ManageUsersPage extends StatefulWidget {
-  const ManageUsersPage({super.key});
+  final String myRank;
+  const ManageUsersPage({super.key, required this.myRank});
   @override
   State<ManageUsersPage> createState() => _ManageUsersPageState();
 }
@@ -1081,6 +1511,12 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
   bool busy = false;
   List<Map<String, dynamic>> users = [];
   StreamSubscription? sub;
+
+  int get myLv => lv(widget.myRank);
+  String get myId => sb.auth.currentUser!.id;
+  List<String> get assignable => ranks.keys.where((k) => myLv >= 5 || lv(k) < myLv).toList();
+  bool canManage(Map<String, dynamic> u) =>
+      u['id'] != myId && (myLv >= 5 || lv(u['rank'] as String?) < myLv);
 
   @override
   void initState() {
@@ -1120,9 +1556,43 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
     if (mounted) setState(() => busy = false);
   }
 
+  Future<void> del(Map<String, dynamic> u) async {
+    if (!canManage(u)) {
+      snack(context, 'Rank kamu tidak cukup untuk menghapus user ini');
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Hapus ${u['username']}?'),
+        content: const Text('Akun dan semua pesannya akan dihapus permanen.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFFF4D6D)),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await sb.rpc('delete_user', params: {'p_id': u['id']});
+      if (mounted) snack(context, 'User dihapus');
+    } on PostgrestException catch (e) {
+      if (mounted) snack(context, e.message);
+    } catch (_) {
+      if (mounted) snack(context, 'Gagal menghapus user');
+    }
+  }
+
   Widget rankChips(String sel, void Function(String) on) => Wrap(
         spacing: 6,
         children: ranks.entries
+            .where((e) => assignable.contains(e.key))
             .map((e) => ChoiceChip(
                   avatar: Icon(e.value.icon, size: 16, color: e.value.solid),
                   label: Text(e.value.name),
@@ -1133,8 +1603,13 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
       );
 
   void edit(Map<String, dynamic> u) {
+    if (!canManage(u)) {
+      snack(context, 'Rank kamu tidak cukup untuk mengelola user ini');
+      return;
+    }
     var r = u['rank'] as String;
     int? d = -1;
+    final pc = TextEditingController();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1153,26 +1628,49 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
               const Text('Masa aktif', style: TextStyle(color: mu)),
               const SizedBox(height: 6),
               DurationPicker(allowKeep: true, onChanged: (v) => d = v),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () async {
-                    final upd = <String, dynamic>{'rank': r};
-                    if (d != -1) {
-                      upd['expires_at'] =
-                          d == null ? null : DateTime.now().toUtc().add(Duration(days: d!)).toIso8601String();
-                    }
-                    try {
-                      await sb.from('profiles').update(upd).eq('id', u['id'] as String);
-                      if (ctx.mounted) Navigator.pop(ctx);
-                    } catch (_) {
-                      if (ctx.mounted) snack(ctx, 'Gagal menyimpan');
-                    }
-                  },
-                  child: const Text('Simpan'),
-                ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: pc,
+                decoration: const InputDecoration(
+                    labelText: 'Password baru (kosongkan jika tidak diubah)', border: OutlineInputBorder()),
               ),
+              const SizedBox(height: 16),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      del(u);
+                    },
+                    icon: const Icon(Icons.delete_outline, color: Color(0xFFFF6B81)),
+                    label: const Text('Hapus', style: TextStyle(color: Color(0xFFFF6B81))),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () async {
+                      try {
+                        await sb.rpc('update_user', params: {
+                          'p_id': u['id'],
+                          'p_rank': r,
+                          'p_set_expiry': d != -1,
+                          'p_days': d == -1 ? null : d,
+                        });
+                        if (pc.text.isNotEmpty) {
+                          await sb.rpc('set_user_password', params: {'p_id': u['id'], 'p_password': pc.text});
+                        }
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      } on PostgrestException catch (e) {
+                        if (ctx.mounted) snack(ctx, e.message);
+                      } catch (_) {
+                        if (ctx.mounted) snack(ctx, 'Gagal menyimpan');
+                      }
+                    },
+                    child: const Text('Simpan'),
+                  ),
+                ),
+              ]),
             ]),
           ),
         ),
@@ -1183,7 +1681,7 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Kelola User'), backgroundColor: card),
-        body: ListView(padding: const EdgeInsets.all(18), children: [
+        body: ListView(physics: const BouncingScrollPhysics(), padding: const EdgeInsets.all(18), children: [
           box(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Tambah user', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
             const SizedBox(height: 14),
@@ -1222,6 +1720,7 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
             children: users.map((u) {
               final rk = u['rank'] as String;
               final exp = u['expires_at'];
+              final can = canManage(u);
               return InkWell(
                 onTap: () => edit(u),
                 child: Padding(
@@ -1238,7 +1737,15 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
                         ),
                       ]),
                     ),
-                    const Icon(Icons.edit_outlined, size: 18, color: mu),
+                    if (can) ...[
+                      const Icon(Icons.edit_outlined, size: 18, color: mu),
+                      const SizedBox(width: 16),
+                      GestureDetector(
+                        onTap: () => del(u),
+                        child: const Icon(Icons.delete_outline, size: 20, color: Color(0xFFFF6B81)),
+                      ),
+                    ] else
+                      const Icon(Icons.lock_outline, size: 18, color: mu),
                   ]),
                 ),
               );
