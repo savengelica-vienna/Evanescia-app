@@ -34,6 +34,17 @@ jobs:
 
       - run: flutter pub get
 
+      - name: Matikan Android lint vital (workaround crash lint)
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/nolint.gradle <<'EOF'
+          allprojects {
+            tasks.configureEach { t ->
+              if (t.name.startsWith('lintVital')) { t.enabled = false }
+            }
+          }
+          EOF
+
       - name: Build release APK
         run: |
           VER=${GITHUB_REF_NAME#v}
@@ -57,4 +68,3 @@ jobs:
             -H "apikey: $SUPABASE_SECRET_KEY" \
             -H "Content-Type: application/json" \
             -d "{\"version_code\": ${{ github.run_number }}, \"version_name\": \"$VER\", \"apk_url\": \"$URL\", \"changelog\": \"Versi $VER\"}"
-            
