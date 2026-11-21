@@ -293,8 +293,8 @@ class GlassNav extends StatelessWidget {
   static const _fill = [Icons.home_rounded, Icons.chat_bubble_rounded, Icons.person_rounded];
   static const _labels = ['Home', 'Chat', 'Profile'];
   static const _barH = 68.0;
-  static const _over = 12.0; // lensa lebih tinggi dari bar
-  static const _side = 6.0; // dan sedikit lebih lebar dari slotnya
+  static const _over = 5.0; // lensa lebih tinggi dari bar
+  static const _side = 2.0; // dan sedikit lebih lebar dari slotnya
 
   @override
   Widget build(BuildContext context) {
@@ -347,7 +347,7 @@ class GlassNav extends StatelessWidget {
                   Positioned.fill(
                     child: RawMagnifier(
                       size: Size(lensW, lensH),
-                      magnificationScale: 1.25,
+                      magnificationScale: 1.15,
                       focalPointOffset: Offset.zero,
                       decoration: MagnifierDecoration(
                         shape: const StadiumBorder(),
@@ -1088,6 +1088,7 @@ class _ChatListPageState extends State<ChatListPage> {
   List<Map<String, dynamic>> users = [], msgs = [], hides = [];
   final subs = <StreamSubscription>[];
   final acked = <String>{};
+  int seg = 0;
 
   @override
   void initState() {
@@ -1136,6 +1137,39 @@ class _ChatListPageState extends State<ChatListPage> {
       acked.removeAll(ids);
     }
   }
+
+  Widget segBar() => Glass(
+        radius: 26,
+        blur: 12,
+        strength: .30,
+        padding: const EdgeInsets.all(4),
+        child: Row(children: [
+          for (final e in const [(0, 'Grup', Icons.groups_outlined), (1, 'User', Icons.person_outline)])
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => seg = e.$1),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(22),
+                    color: seg == e.$1 ? Colors.white.withOpacity(.22) : Colors.transparent,
+                  ),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Icon(e.$3, size: 18, color: seg == e.$1 ? Colors.white : Colors.white70),
+                    const SizedBox(width: 6),
+                    Text(e.$2,
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: seg == e.$1 ? Colors.white : Colors.white70)),
+                  ]),
+                ),
+              ),
+            ),
+        ]),
+      );
 
   void open(Map<String, dynamic>? peer) => Navigator.push(
       context, CupertinoPageRoute(builder: (_) => ChatRoomPage(me: widget.me, peer: peer)));
@@ -1200,14 +1234,20 @@ class _ChatListPageState extends State<ChatListPage> {
     });
 
     final g = lastOf('main');
-    final items = <Widget>[
+    final groupItems = <Widget>[
       convRow(
         leading: const GroupAvatar(s: 52),
         title: const Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        preview: g == null ? 'Belum ada pesan' : '${who(g)}: ${g['body']}',
+        preview: g == null
+            ? 'Belum ada pesan'
+            : (g['deleted_at'] != null
+                ? (g['user_id'] == myId ? 'Kamu menghapus pesan ini' : 'Pesan ini telah dihapus')
+                : '${who(g)}: ${g['body']}'),
         time: g == null ? null : chatTime(g['created_at'] as String),
         onTap: () => open(null),
       ),
+    ];
+    final userItems = <Widget>[
       for (final e in entries)
         convRow(
           leading: avatar((e.key['rank'] ?? 'user') as String, s: 52, url: e.key['avatar_url'] as String?),
@@ -1219,11 +1259,14 @@ class _ChatListPageState extends State<ChatListPage> {
           ]),
           preview: e.value == null
               ? 'Ketuk untuk mulai chat'
-              : (e.value!['user_id'] == myId ? 'Kamu: ' : '') + (e.value!['body'] as String),
+              : (e.value!['deleted_at'] != null
+                  ? (e.value!['user_id'] == myId ? 'Kamu menghapus pesan ini' : 'Pesan ini telah dihapus')
+                  : (e.value!['user_id'] == myId ? 'Kamu: ' : '') + (e.value!['body'] as String)),
           time: e.value == null ? null : chatTime(e.value!['created_at'] as String),
           onTap: () => open(e.key),
         ),
     ];
+    final items = seg == 0 ? groupItems : userItems;
 
     return ListView(
       physics: const BouncingScrollPhysics(),
@@ -1231,6 +1274,8 @@ class _ChatListPageState extends State<ChatListPage> {
       children: [
         const Text('Chat', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
         const SizedBox(height: 14),
+        segBar(),
+        const SizedBox(height: 12),
         Glass(
           radius: 22,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
@@ -1241,7 +1286,7 @@ class _ChatListPageState extends State<ChatListPage> {
             ],
           ]),
         ),
-        if (entries.isEmpty)
+        if (seg == 1 && entries.isEmpty)
           const Padding(
             padding: EdgeInsets.all(24),
             child: Center(child: Text('Belum ada user lain', style: TextStyle(color: Colors.white70))),
@@ -1269,6 +1314,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   Set<String> hidden = {};
   Set<String> stars = {};
   Set<String> gone = {};
+  Set<String> tomb = {};
   Map<String, int> rstat = {};
   final pending = <Map<String, dynamic>>[];
   final readSent = <String>{};
@@ -1452,13 +1498,39 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     }
   }
 
+  bool isDel(Map<String, dynamic> m) => m['deleted_at'] != null || tomb.contains(m['id']);
+
+  Widget tombstone(bool mine) => Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.block, size: 15, color: Colors.white54),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(mine ? 'Kamu menghapus pesan ini' : 'Pesan ini telah dihapus',
+              style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic, color: Colors.white60)),
+        ),
+      ]);
+
+  void delSheet(String id) => showModalBottomSheet(
+        context: context,
+        backgroundColor: card,
+        builder: (ctx) => SafeArea(
+          child: ListTile(
+            leading: const Icon(Icons.delete_outline, color: Color(0xFFFF6B81)),
+            title: const Text('Hapus untuk saya'),
+            onTap: () {
+              Navigator.pop(ctx);
+              hideForMe(id);
+            },
+          ),
+        ),
+      );
+
   Future<void> deleteAll(String id) async {
-    setState(() => gone.add(id)); // langsung hilang di layar kamu
+    setState(() => tomb.add(id)); // langsung berubah jadi "Kamu menghapus pesan ini"
     try {
-      await sb.from('messages').delete().eq('id', id);
+      await sb.rpc('delete_message', params: {'p_id': id});
     } catch (_) {
       if (mounted) {
-        setState(() => gone.remove(id));
+        setState(() => tomb.remove(id));
         snack(context, 'Gagal menghapus pesan');
       }
     }
@@ -1653,6 +1725,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     final t = DateTime.parse(m['created_at'] as String).toLocal();
     final time = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     final id = m['id'] as String;
+    final del = isDel(m);
     final pinned = m['pinned_at'] != null;
     final counts = <String, int>{};
     String? my;
@@ -1686,7 +1759,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
           ]),
           const SizedBox(height: 2),
         ],
-        if (m['forwarded'] == true)
+        if (!del && m['forwarded'] == true)
           const Padding(
             padding: EdgeInsets.only(bottom: 3),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1695,8 +1768,8 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
               Text('Diteruskan', style: TextStyle(color: mu, fontSize: 11, fontStyle: FontStyle.italic)),
             ]),
           ),
-        if (m['reply_to'] != null) quote(m['reply_to'] as String),
-        Text(m['body'] as String, style: const TextStyle(fontSize: 15)),
+        if (!del && m['reply_to'] != null) quote(m['reply_to'] as String),
+        del ? tombstone(mine) : Text(m['body'] as String, style: const TextStyle(fontSize: 15)),
         const SizedBox(height: 2),
         Align(
           alignment: Alignment.centerRight,
@@ -1707,7 +1780,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
             ],
             if (pinned) ...[const Icon(Icons.push_pin, size: 10, color: mu), const SizedBox(width: 3)],
             Text(time, style: const TextStyle(color: mu, fontSize: 10)),
-            if (mine) ...[const SizedBox(width: 3), tick(m)],
+            if (mine && !del) ...[const SizedBox(width: 3), tick(m)],
           ]),
         ),
       ]),
@@ -1717,6 +1790,10 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
         onTap: m['_st'] == 'failed' ? () => retry(m) : null,
         onLongPress: () {
           if (m['_st'] != null) return;
+          if (del) {
+            delSheet(id);
+            return;
+          }
           final rb = bctx.findRenderObject() as RenderBox;
           final off = rb.localToGlobal(Offset.zero);
           pick(m, mine, off & rb.size, bodyW);
@@ -1724,7 +1801,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
         child: bodyW,
       ),
     );
-    final chips = counts.isEmpty
+    final chips = (counts.isEmpty || del)
         ? const SizedBox.shrink()
         : Padding(
             padding: const EdgeInsets.only(top: 3),
@@ -1804,7 +1881,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                     Text(r == null ? 'Pesan' : nameOf(r),
                         style: const TextStyle(color: ac, fontSize: 12, fontWeight: FontWeight.w700)),
-                    Text(r == null ? 'Pesan tidak tersedia' : r['body'] as String,
+                    Text(r == null ? 'Pesan tidak tersedia' : (r['deleted_at'] != null ? 'Pesan ini telah dihapus' : r['body'] as String),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 13, color: Colors.white70)),
