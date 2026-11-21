@@ -1,5 +1,10 @@
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
+import 'dart:ui' as ui;
+import 'dart:typed_data';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'dart:io';
@@ -106,7 +111,71 @@ class _OceanBgState extends State<OceanBg> with SingleTickerProviderStateMixin {
       );
 }
 
-// ---------- LIQUID GLASS (kartu & tombol) ----------
+// ---------- LIQUID GLASS ala iOS ----------
+// Lapisan: bayangan luar lembut -> blur latar -> isi tint tipis -> kilau atas
+// -> garis tepi (rim light) yang terang di sudut kiri-atas & kanan-bawah.
+class _ShadowPainter extends CustomPainter {
+  final double radius;
+  const _ShadowPainter(this.radius);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rr = RRect.fromRectAndRadius(Offset.zero & size, Radius.circular(radius));
+    canvas.save();
+    canvas.clipPath(Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(Rect.fromLTWH(-80, -80, size.width + 160, size.height + 160))
+      ..addRRect(rr));
+    canvas.drawRRect(
+      rr.shift(const Offset(0, 8)),
+      Paint()
+        ..color = Colors.black.withOpacity(.24)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _ShadowPainter o) => o.radius != radius;
+}
+
+class _RimPainter extends CustomPainter {
+  final double radius, width;
+  const _RimPainter({required this.radius, this.width = 1.4});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rr = RRect.fromRectAndRadius(rect, Radius.circular(radius)).deflate(width / 2);
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = width
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withOpacity(.95),
+            Colors.white.withOpacity(.10),
+            Colors.white.withOpacity(.10),
+            Colors.white.withOpacity(.65),
+          ],
+          stops: const [0, .38, .62, 1],
+        ).createShader(rect),
+    );
+    // garis dalam tipis untuk kesan ketebalan kaca
+    canvas.drawRRect(
+      rr.deflate(width + .5),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = Colors.white.withOpacity(.07),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _RimPainter o) => o.radius != radius || o.width != width;
+}
+
 class Glass extends StatelessWidget {
   final Widget child;
   final double radius, blur, strength;
@@ -116,8 +185,8 @@ class Glass extends StatelessWidget {
     super.key,
     required this.child,
     this.radius = 22,
-    this.blur = 18,
-    this.strength = .58,
+    this.blur = 14,
+    this.strength = .46,
     this.tint = card,
     this.padding = EdgeInsets.zero,
   });
@@ -125,31 +194,36 @@ class Glass extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final r = BorderRadius.circular(radius);
-    return ClipRRect(
-      borderRadius: r,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            borderRadius: r,
-            border: Border.all(color: Colors.white.withOpacity(.22)),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [tint.withOpacity(strength + .10), tint.withOpacity(strength - .12)],
+    return CustomPaint(
+      painter: _ShadowPainter(radius),
+      child: ClipRRect(
+        borderRadius: r,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+          child: CustomPaint(
+            foregroundPainter: _RimPainter(radius: radius),
+            child: Container(
+              padding: padding,
+              decoration: BoxDecoration(
+                borderRadius: r,
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [tint.withOpacity(strength), tint.withOpacity(strength * .62)],
+                ),
+              ),
+              foregroundDecoration: BoxDecoration(
+                borderRadius: r,
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.white.withOpacity(.20), Colors.white.withOpacity(.03), Colors.white.withOpacity(0)],
+                  stops: const [0, .35, .7],
+                ),
+              ),
+              child: child,
             ),
           ),
-          foregroundDecoration: BoxDecoration(
-            borderRadius: r,
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Colors.white.withOpacity(.15), Colors.white.withOpacity(0)],
-              stops: const [0, .45],
-            ),
-          ),
-          child: child,
         ),
       ),
     );
@@ -160,7 +234,7 @@ Widget glassBox(Widget child) => Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: SizedBox(
         width: double.infinity,
-        child: Glass(radius: 22, padding: const EdgeInsets.all(18), child: child),
+        child: Glass(radius: 26, padding: const EdgeInsets.all(18), child: child),
       ),
     );
 
@@ -176,52 +250,30 @@ class GlassButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.tint = ac,
-    this.strength = .55,
+    this.strength = .62,
   });
 
   @override
   Widget build(BuildContext context) {
-    final r = BorderRadius.circular(40);
     return Opacity(
       opacity: onPressed == null ? .5 : 1,
-      child: ClipRRect(
-        borderRadius: r,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: r,
-              border: Border.all(color: Colors.white.withOpacity(.42), width: 1.2),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [tint.withOpacity(strength + .25), tint.withOpacity(strength - .12)],
-              ),
-            ),
-            foregroundDecoration: BoxDecoration(
-              borderRadius: r,
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Colors.white.withOpacity(.30), Colors.white.withOpacity(0)],
-                stops: const [0, .55],
-              ),
-            ),
-            child: Material(
-              type: MaterialType.transparency,
-              child: InkWell(
-                onTap: onPressed,
-                borderRadius: r,
-                child: Center(
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    IconTheme(data: const IconThemeData(color: Colors.white, size: 20), child: icon),
-                    const SizedBox(width: 8),
-                    Text(label,
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-                  ]),
-                ),
-              ),
+      child: Glass(
+        radius: 40,
+        blur: 10,
+        tint: tint,
+        strength: strength,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(40),
+            child: Center(
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                IconTheme(data: const IconThemeData(color: Colors.white, size: 20), child: icon),
+                const SizedBox(width: 8),
+                Text(label,
+                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+              ]),
             ),
           ),
         ),
@@ -230,7 +282,7 @@ class GlassButton extends StatelessWidget {
   }
 }
 
-// ---------- NAV MENGAMBANG (liquid glass, bubble aktif lebih besar dari bar) ----------
+// ---------- NAV MENGAMBANG: bar kaca + lensa pembesar (RawMagnifier) ----------
 class GlassNav extends StatelessWidget {
   final int index;
   final ValueChanged<int> onTap;
@@ -239,99 +291,27 @@ class GlassNav extends StatelessWidget {
   static const _icons = [Icons.home_outlined, Icons.chat_bubble_outline, Icons.person_outline];
   static const _fill = [Icons.home_rounded, Icons.chat_bubble_rounded, Icons.person_rounded];
   static const _labels = ['Home', 'Chat', 'Profile'];
-  static const _barH = 68.0; // tinggi bar
-  static const _over = 10.0; // bubble aktif melebihi bar atas & bawah
-  static const _side = 4.0; // bubble aktif sedikit melebar ke samping
+  static const _barH = 68.0;
+  static const _over = 12.0; // lensa lebih tinggi dari bar
+  static const _side = 6.0; // dan sedikit lebih lebar dari slotnya
 
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).viewPadding.bottom;
-    final bubbleR = BorderRadius.circular((_barH + _over * 2) / 2);
+    const lensH = _barH + _over * 2;
     return Padding(
       padding: EdgeInsets.fromLTRB(28, 0, 28, 12 + bottom),
       child: SizedBox(
         height: _barH,
         child: LayoutBuilder(builder: (context, c) {
           final slot = c.maxWidth / 3;
+          final lensW = slot + _side * 2;
           return Stack(clipBehavior: Clip.none, children: [
-            // bar kaca
-            Positioned.fill(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(34),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(34),
-                      border: Border.all(color: Colors.white.withOpacity(.32)),
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Colors.white.withOpacity(.24), Colors.white.withOpacity(.07)],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+            // 1) bar kaca
+            const Positioned.fill(
+              child: Glass(radius: 34, blur: 16, tint: Colors.white, strength: .16, child: SizedBox.expand()),
             ),
-            // bubble aktif: lebih besar dari bar, kaca bening seperti lensa
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 450),
-              curve: Curves.easeOutBack,
-              left: index * slot - _side,
-              top: -_over,
-              width: slot + _side * 2,
-              height: _barH + _over * 2,
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: bubbleR,
-                    boxShadow: [
-                      BoxShadow(color: Colors.white.withOpacity(.20), blurRadius: 18, spreadRadius: -2),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: bubbleR,
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 3, sigmaY: 3),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: bubbleR,
-                          border: Border.all(color: Colors.white.withOpacity(.62), width: 1.4),
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Colors.white.withOpacity(.42),
-                              Colors.white.withOpacity(.10),
-                              Colors.white.withOpacity(.24),
-                            ],
-                          ),
-                        ),
-                        child: Align(
-                          alignment: const Alignment(0, -.78),
-                          child: FractionallySizedBox(
-                            widthFactor: .62,
-                            heightFactor: .2,
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(99),
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [Colors.white.withOpacity(.55), Colors.white.withOpacity(0)],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            // ikon & label (yang aktif di-zoom)
+            // 2) ikon & label (di bawah lensa, jadi ikut diperbesar)
             Positioned.fill(
               child: Row(children: [
                 for (var i = 0; i < 3; i++)
@@ -340,26 +320,64 @@ class GlassNav extends StatelessWidget {
                       behavior: HitTestBehavior.opaque,
                       onTap: () => onTap(i),
                       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        AnimatedScale(
-                          scale: index == i ? 1.3 : 1,
-                          duration: const Duration(milliseconds: 380),
-                          curve: Curves.easeOutBack,
-                          child: Icon(index == i ? _fill[i] : _icons[i],
-                              size: 24, color: index == i ? Colors.white : Colors.white70),
-                        ),
-                        SizedBox(height: index == i ? 4 : 2),
-                        AnimatedDefaultTextStyle(
-                          duration: const Duration(milliseconds: 250),
-                          style: TextStyle(
-                              fontSize: index == i ? 12 : 11,
-                              fontWeight: index == i ? FontWeight.w700 : FontWeight.w600,
-                              color: index == i ? Colors.white : Colors.white70),
-                          child: Text(_labels[i]),
-                        ),
+                        Icon(index == i ? _fill[i] : _icons[i],
+                            size: 24, color: index == i ? Colors.white : Colors.white70),
+                        const SizedBox(height: 2),
+                        Text(_labels[i],
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: index == i ? Colors.white : Colors.white70)),
                       ]),
                     ),
                   ),
               ]),
+            ),
+            // 3) lensa liquid glass: memperbesar apa yang ada di bawahnya
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 480),
+              curve: Curves.easeOutBack,
+              left: index * slot - _side,
+              top: -_over,
+              width: lensW,
+              height: lensH,
+              child: IgnorePointer(
+                child: Stack(children: [
+                  Positioned.fill(
+                    child: RawMagnifier(
+                      size: Size(lensW, lensH),
+                      magnificationScale: 1.25,
+                      focalPointOffset: Offset.zero,
+                      decoration: MagnifierDecoration(
+                        shape: const StadiumBorder(),
+                        shadows: [
+                          BoxShadow(color: Colors.black.withOpacity(.20), blurRadius: 18, offset: const Offset(0, 8)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: CustomPaint(
+                      foregroundPainter: const _RimPainter(radius: lensH / 2, width: 1.8),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(lensH / 2),
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.white.withOpacity(.26),
+                              Colors.white.withOpacity(.05),
+                              Colors.white.withOpacity(.12),
+                            ],
+                            stops: const [0, .5, 1],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
             ),
           ]);
         }),
@@ -745,12 +763,31 @@ class ProfilePage extends StatelessWidget {
     return Column(children: [
       glassBox(Column(children: [
         const SizedBox(height: 8),
-        Container(
-          width: 84,
-          height: 84,
-          decoration: BoxDecoration(
-              shape: BoxShape.circle, color: bg, border: Border.all(color: line, width: 2)),
-          child: Icon(r.icon, size: 38, color: r.solid),
+        GestureDetector(
+          onTap: () => changeMyAvatar(context),
+          child: SizedBox(
+            width: 92,
+            height: 92,
+            child: Stack(clipBehavior: Clip.none, children: [
+              Positioned(
+                left: 4,
+                top: 4,
+                child: Container(
+                  width: 84,
+                  height: 84,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                      shape: BoxShape.circle, color: bg, border: Border.all(color: line, width: 2)),
+                  child: (me['avatar_url'] is String && (me['avatar_url'] as String).isNotEmpty)
+                      ? Image.network(me['avatar_url'] as String,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Icon(r.icon, size: 38, color: r.solid))
+                      : Icon(r.icon, size: 38, color: r.solid),
+                ),
+              ),
+              Positioned(right: 0, bottom: 0, child: camBadge()),
+            ]),
+          ),
         ),
         const SizedBox(height: 14),
         RankText(name, rank, size: 28),
@@ -1011,13 +1048,18 @@ void showRankList(BuildContext c) => showModalBottomSheet(
       ),
     );
 
-Widget avatar(String rank, {double s = 34}) {
+Widget avatar(String rank, {double s = 34, String? url}) {
   final r = ranks[rank] ?? ranks['user']!;
+  final fallback = Icon(r.icon, size: s * .5, color: r.solid);
   return Container(
     width: s,
     height: s,
+    clipBehavior: Clip.antiAlias,
     decoration: BoxDecoration(shape: BoxShape.circle, color: card, border: Border.all(color: line)),
-    child: Icon(r.icon, size: s * .5, color: r.solid),
+    child: (url == null || url.isEmpty)
+        ? fallback
+        : Image.network(url,
+            fit: BoxFit.cover, width: s, height: s, errorBuilder: (_, __, ___) => Center(child: fallback)),
   );
 }
 
@@ -1127,15 +1169,7 @@ class _ChatListPageState extends State<ChatListPage> {
     final g = lastOf('main');
     final items = <Widget>[
       convRow(
-        leading: Container(
-          width: 52,
-          height: 52,
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(colors: [Color(0xFF6C7BFF), Color(0xFF9400FF)]),
-          ),
-          child: const Icon(Icons.groups_outlined, color: Colors.white, size: 26),
-        ),
+        leading: const GroupAvatar(s: 52),
         title: const Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         preview: g == null ? 'Belum ada pesan' : '${who(g)}: ${g['body']}',
         time: g == null ? null : chatTime(g['created_at'] as String),
@@ -1143,7 +1177,7 @@ class _ChatListPageState extends State<ChatListPage> {
       ),
       for (final e in entries)
         convRow(
-          leading: avatar((e.key['rank'] ?? 'user') as String, s: 52),
+          leading: avatar((e.key['rank'] ?? 'user') as String, s: 52, url: e.key['avatar_url'] as String?),
           title: Row(children: [
             Flexible(child: RankText(e.key['username'] as String, (e.key['rank'] ?? 'user') as String, size: 16)),
             const SizedBox(width: 6),
@@ -1200,6 +1234,9 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   List<Map<String, dynamic>> msgs = [], reacts = [], vis = [];
   Map<String, Map<String, dynamic>> profs = {};
   Set<String> hidden = {};
+  Set<String> stars = {};
+  Map<String, dynamic>? replyTo;
+  final focus = FocusNode();
   final seen = <String>{};
   bool loaded = false;
   final subs = <StreamSubscription>[];
@@ -1233,6 +1270,15 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     subs.add(sb.from('message_hides').stream(primaryKey: ['message_id', 'user_id']).listen((r) {
       if (mounted) setState(() => hidden = {for (final h in r) h['message_id'] as String});
     }));
+    subs.add(sb.from('message_stars').stream(primaryKey: ['message_id', 'user_id']).listen((r) {
+      final me = sb.auth.currentUser!.id;
+      if (mounted) {
+        setState(() => stars = {
+              for (final x in r)
+                if (x['user_id'] == me) x['message_id'] as String
+            });
+      }
+    }, onError: (_) {}));
   }
 
   @override
@@ -1241,6 +1287,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
       x.cancel();
     }
     ctl.dispose();
+    focus.dispose();
     super.dispose();
   }
 
@@ -1248,8 +1295,12 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     final t = ctl.text.trim();
     if (t.isEmpty) return;
     ctl.clear();
+    final data = <String, dynamic>{'body': t, 'room': room};
+    final rt = replyTo;
+    if (rt != null) data['reply_to'] = rt['id'];
+    setState(() => replyTo = null);
     try {
-      await sb.from('messages').insert({'body': t, 'room': room});
+      await sb.from('messages').insert(data);
     } catch (_) {
       if (mounted) snack(context, 'Gagal mengirim pesan');
     }
@@ -1295,64 +1346,137 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     }
   }
 
-  void pick(Map<String, dynamic> m, bool mine) {
-    final id = m['id'] as String;
-    final canAll = myLv >= 3 && (isGroup || mine);
-    final canPin = isGroup && myLv >= 2;
-    final pinned = m['pinned_at'] != null;
+  void _hideKb() {
+    focus.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void openProfile(Map<String, dynamic>? p) {
+    if (p == null) return;
+    _hideKb();
+    Navigator.push(
+        context,
+        CupertinoPageRoute(
+            builder: (_) => UserProfilePage(me: widget.me, user: p, fromRoom: room)));
+  }
+
+  Future<void> star(String id) async {
+    final uid = sb.auth.currentUser!.id;
+    try {
+      if (stars.contains(id)) {
+        await sb.from('message_stars').delete().match({'message_id': id, 'user_id': uid});
+      } else {
+        await sb.from('message_stars').insert({'message_id': id});
+      }
+    } catch (_) {
+      if (mounted) snack(context, 'Gagal memberi bintang');
+    }
+  }
+
+  void forward(Map<String, dynamic> m) {
+    final myId = sb.auth.currentUser!.id;
+    final targets = <MapEntry<String, String>>[
+      const MapEntry('main', 'Chat Utama'),
+      for (final p in profs.values)
+        if (p['id'] != myId) MapEntry(dmRoom(myId, p['id'] as String), p['username'] as String),
+    ];
+    final sel = <String>{};
     showModalBottomSheet(
       context: context,
       backgroundColor: card,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: ['👍', '❤️', '😂', '😮', '😢', '🙏']
-                  .map((e) => InkWell(
-                        onTap: () {
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Teruskan ke', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Flexible(
+                child: ListView(shrinkWrap: true, children: [
+                  for (final t in targets)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: sel.contains(t.key),
+                      title: Text(t.value),
+                      onChanged: (v) => set(() {
+                        if (v == true) {
+                          sel.add(t.key);
+                        } else {
+                          sel.remove(t.key);
+                        }
+                      }),
+                    ),
+                ]),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: GlassButton(
+                  icon: const Icon(Icons.send),
+                  label: sel.isEmpty ? 'Pilih tujuan' : 'Kirim (${sel.length})',
+                  onPressed: sel.isEmpty
+                      ? null
+                      : () async {
                           Navigator.pop(ctx);
-                          react(id, e);
+                          try {
+                            for (final r in sel) {
+                              await sb.from('messages').insert({'body': m['body'], 'room': r, 'forwarded': true});
+                            }
+                            if (mounted) snack(context, 'Pesan diteruskan');
+                          } catch (_) {
+                            if (mounted) snack(context, 'Gagal meneruskan pesan');
+                          }
                         },
-                        child: Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: Text(e, style: const TextStyle(fontSize: 28))),
-                      ))
-                  .toList(),
-            ),
-            const SizedBox(height: 6),
-            if (canPin)
-              ListTile(
-                leading: Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined),
-                title: Text(pinned ? 'Lepas sematan' : 'Sematkan pesan'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  pin(id, !pinned);
-                },
+                ),
               ),
-            ListTile(
-              leading: const Icon(Icons.visibility_off_outlined),
-              title: const Text('Hapus untuk saya'),
-              onTap: () {
-                Navigator.pop(ctx);
-                hideForMe(id);
-              },
-            ),
-            if (canAll)
-              ListTile(
-                leading: const Icon(Icons.delete_outline, color: Color(0xFFFF6B81)),
-                title: const Text('Hapus untuk semua orang', style: TextStyle(color: Color(0xFFFF6B81))),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  deleteAll(id);
-                },
-              ),
-          ]),
+            ]),
+          ),
         ),
       ),
+    ).whenComplete(_hideKb);
+  }
+
+  Future<void> pick(Map<String, dynamic> m, bool mine, Rect rect, Widget bodyW) async {
+    final id = m['id'] as String;
+    final canPin = isGroup && myLv >= 2;
+    final pinned = m['pinned_at'] != null;
+    final uid = sb.auth.currentUser!.id;
+    String? myEmoji;
+    for (final x in reacts) {
+      if (x['message_id'] == id && x['user_id'] == uid) myEmoji = x['emoji'] as String?;
+    }
+    _hideKb();
+    await showMsgMenu(
+      context: context,
+      rect: rect,
+      mine: mine,
+      bubble: bodyW,
+      myEmoji: myEmoji,
+      starred: stars.contains(id),
+      canPin: canPin,
+      pinned: pinned,
+      onReact: (e) => react(id, e),
+      onMore: () async {
+        final e = await showEmojiSheet(context);
+        if (e != null) react(id, e);
+        _hideKb();
+      },
+      onReply: () => setState(() => replyTo = m),
+      onForward: () => forward(m),
+      onCopy: () {
+        Clipboard.setData(ClipboardData(text: m['body'] as String));
+        snack(context, 'Pesan disalin');
+      },
+      onStar: () => star(id),
+      onPin: () => pin(id, !pinned),
+      onDeleteMe: () => hideForMe(id),
+      onDeleteAll: mine ? () => deleteAll(id) : null,
     );
+    _hideKb();
   }
 
   void showPinned(List<Map<String, dynamic>> pins) => showModalBottomSheet(
@@ -1412,40 +1536,61 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     final isNew = loaded && !seen.contains(id);
     seen.add(id);
     const big = Radius.circular(16), small = Radius.circular(4);
-    final content = GestureDetector(
-      onLongPress: () => pick(m, mine),
-      child: Container(
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * .72),
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-        decoration: BoxDecoration(
-          color: mine ? const Color(0xFF144D37) : card,
-          borderRadius: BorderRadius.only(
-            topLeft: (!mine && first) ? small : big,
-            topRight: (mine && first) ? small : big,
-            bottomLeft: big,
-            bottomRight: big,
-          ),
-          border: Border.all(color: mine ? Colors.transparent : line),
+    final bodyW = Container(
+      constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * .72),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+      decoration: BoxDecoration(
+        color: mine ? const Color(0xFF144D37) : card,
+        borderRadius: BorderRadius.only(
+          topLeft: (!mine && first) ? small : big,
+          topRight: (mine && first) ? small : big,
+          bottomLeft: big,
+          bottomRight: big,
         ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          if (!mine && first) ...[
-            Row(mainAxisSize: MainAxisSize.min, children: [
-              RankText(name, rank, size: 13),
-              const SizedBox(width: 5),
-              RankText('(${(ranks[rank] ?? ranks['user']!).name})', rank, size: 10),
-            ]),
-            const SizedBox(height: 2),
-          ],
-          Text(m['body'] as String, style: const TextStyle(fontSize: 15)),
+        border: Border.all(color: mine ? Colors.transparent : line),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        if (!mine && first) ...[
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            RankText(name, rank, size: 13),
+            const SizedBox(width: 5),
+            RankText('(${(ranks[rank] ?? ranks['user']!).name})', rank, size: 10),
+          ]),
           const SizedBox(height: 2),
-          Align(
-            alignment: Alignment.centerRight,
+        ],
+        if (m['forwarded'] == true)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 3),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              if (pinned) ...[const Icon(Icons.push_pin, size: 10, color: mu), const SizedBox(width: 3)],
-              Text(time, style: const TextStyle(color: mu, fontSize: 10)),
+              Icon(Icons.shortcut, size: 12, color: mu),
+              SizedBox(width: 4),
+              Text('Diteruskan', style: TextStyle(color: mu, fontSize: 11, fontStyle: FontStyle.italic)),
             ]),
           ),
-        ]),
+        if (m['reply_to'] != null) quote(m['reply_to'] as String),
+        Text(m['body'] as String, style: const TextStyle(fontSize: 15)),
+        const SizedBox(height: 2),
+        Align(
+          alignment: Alignment.centerRight,
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (stars.contains(id)) ...[
+              const Icon(Icons.star, size: 11, color: Color(0xFFFFD54F)),
+              const SizedBox(width: 3),
+            ],
+            if (pinned) ...[const Icon(Icons.push_pin, size: 10, color: mu), const SizedBox(width: 3)],
+            Text(time, style: const TextStyle(color: mu, fontSize: 10)),
+          ]),
+        ),
+      ]),
+    );
+    final content = Builder(
+      builder: (bctx) => GestureDetector(
+        onLongPress: () {
+          final rb = bctx.findRenderObject() as RenderBox;
+          final off = rb.localToGlobal(Offset.zero);
+          pick(m, mine, off & rb.size, bodyW);
+        },
+        child: bodyW,
       ),
     );
     final chips = counts.isEmpty
@@ -1481,7 +1626,15 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: mine
             ? [col]
-            : [first ? avatar(rank) : const SizedBox(width: 34), const SizedBox(width: 6), col],
+            : [
+                first
+                    ? GestureDetector(
+                        onTap: () => openProfile(p),
+                        child: avatar(rank, url: p?['avatar_url'] as String?))
+                    : const SizedBox(width: 34),
+                const SizedBox(width: 6),
+                col
+              ],
       ),
     );
     return TweenAnimationBuilder<double>(
@@ -1494,6 +1647,80 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
         child: Transform.translate(offset: Offset((mine ? 24 : -24) * (1 - v), 14 * (1 - v)), child: child),
       ),
       child: row,
+    );
+  }
+
+  Widget quote(String rid) {
+    Map<String, dynamic>? r;
+    for (final x in msgs) {
+      if (x['id'] == rid) {
+        r = x;
+        break;
+      }
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          color: Colors.black.withOpacity(.22),
+          child: IntrinsicHeight(
+            child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Container(width: 3, color: ac),
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                    Text(r == null ? 'Pesan' : nameOf(r),
+                        style: const TextStyle(color: ac, fontSize: 12, fontWeight: FontWeight.w700)),
+                    Text(r == null ? 'Pesan tidak tersedia' : r['body'] as String,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13, color: Colors.white70)),
+                  ]),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget replyBar() {
+    final r = replyTo!;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+      decoration: BoxDecoration(
+        color: card.withOpacity(.96),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: line),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: IntrinsicHeight(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Container(width: 4, color: ac),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  Text('Membalas ${nameOf(r)}',
+                      style: const TextStyle(color: ac, fontSize: 12, fontWeight: FontWeight.w700)),
+                  Text(r['body'] as String,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13, color: Colors.white70)),
+                ]),
+              ),
+            ),
+            IconButton(
+              onPressed: () => setState(() => replyTo = null),
+              icon: const Icon(Icons.close, size: 18, color: mu),
+            ),
+          ]),
+        ),
+      ),
     );
   }
 
@@ -1532,6 +1759,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
           Expanded(
             child: TextField(
               controller: ctl,
+              focusNode: focus,
               minLines: 1,
               maxLines: 4,
               maxLength: 1000,
@@ -1565,6 +1793,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
         : <Map<String, dynamic>>[];
     final peer = widget.peer;
     final prk = (peer?['rank'] ?? 'user') as String;
+    final Map<String, dynamic>? pp = peer == null ? null : (profs[peer['id']] ?? peer);
     return Container(
       decoration: const BoxDecoration(gradient: chatGrad),
       child: Scaffold(
@@ -1572,15 +1801,29 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
         appBar: AppBar(
           backgroundColor: card,
           scrolledUnderElevation: 0,
-          title: peer == null
-              ? const Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))
-              : Row(children: [
-                  avatar(prk, s: 32),
-                  const SizedBox(width: 10),
-                  RankText(peer['username'] as String, prk, size: 16),
-                  const SizedBox(width: 6),
-                  RankText('(${(ranks[prk] ?? ranks['user']!).name})', prk, size: 12),
-                ]),
+          title: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: peer == null
+                ? () {
+                    _hideKb();
+                    Navigator.push(
+                        context, CupertinoPageRoute(builder: (_) => GroupProfilePage(me: widget.me)));
+                  }
+                : () => openProfile(pp),
+            child: peer == null
+                ? const Row(children: [
+                    GroupAvatar(s: 32),
+                    SizedBox(width: 10),
+                    Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  ])
+                : Row(children: [
+                    avatar(prk, s: 32, url: pp?['avatar_url'] as String?),
+                    const SizedBox(width: 10),
+                    RankText(peer['username'] as String, prk, size: 16),
+                    const SizedBox(width: 6),
+                    RankText('(${(ranks[prk] ?? ranks['user']!).name})', prk, size: 12),
+                  ]),
+          ),
         ),
         body: SafeArea(
           top: false,
@@ -1599,6 +1842,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
                       itemBuilder: (_, i) => bubble(i, uid),
                     ),
             ),
+            if (replyTo != null) replyBar(),
             inputBar(),
           ]),
         ),
@@ -1894,7 +2138,7 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Row(children: [
-                    avatar(rk),
+                    avatar(rk, url: u['avatar_url'] as String?),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1921,4 +2165,683 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
           )),
         ]),
       );
+}
+
+
+// =====================================================================
+// FOTO PROFIL, CROP 1:1, PROFIL USER/GRUP
+// =====================================================================
+Widget camBadge() => Container(
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: ac,
+        border: Border.all(color: Colors.white.withOpacity(.8), width: 1.5),
+      ),
+      child: const Icon(Icons.photo_camera, size: 16, color: Colors.white),
+    );
+
+Future<Uint8List?> pickAndCrop(BuildContext c) async {
+  final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 2048, imageQuality: 92);
+  if (x == null) return null;
+  final bytes = await x.readAsBytes();
+  if (!c.mounted) return null;
+  return Navigator.push<Uint8List>(
+      c, MaterialPageRoute<Uint8List>(fullscreenDialog: true, builder: (_) => CropPage(bytes: bytes)));
+}
+
+Future<String> uploadAvatar(Uint8List png, String folder) async {
+  final path = '$folder/${DateTime.now().millisecondsSinceEpoch}.png';
+  await sb.storage
+      .from('avatars')
+      .uploadBinary(path, png, fileOptions: const FileOptions(contentType: 'image/png'));
+  return sb.storage.from('avatars').getPublicUrl(path);
+}
+
+Future<void> changeMyAvatar(BuildContext c) async {
+  try {
+    final png = await pickAndCrop(c);
+    if (png == null) return;
+    final url = await uploadAvatar(png, sb.auth.currentUser!.id);
+    await sb.rpc('set_my_avatar', params: {'p_url': url});
+    if (c.mounted) snack(c, 'Foto profil diperbarui');
+  } catch (_) {
+    if (c.mounted) snack(c, 'Gagal mengubah foto profil');
+  }
+}
+
+Future<void> changeGroupAvatar(BuildContext c) async {
+  try {
+    final png = await pickAndCrop(c);
+    if (png == null) return;
+    final url = await uploadAvatar(png, 'group');
+    await sb.rpc('set_group_avatar', params: {'p_url': url});
+    if (c.mounted) snack(c, 'Foto grup diperbarui');
+  } catch (_) {
+    if (c.mounted) snack(c, 'Gagal mengubah foto grup');
+  }
+}
+
+class GroupAvatar extends StatefulWidget {
+  final double s;
+  const GroupAvatar({super.key, this.s = 52});
+  @override
+  State<GroupAvatar> createState() => _GroupAvatarState();
+}
+
+class _GroupAvatarState extends State<GroupAvatar> {
+  String? url;
+  StreamSubscription? sub;
+
+  @override
+  void initState() {
+    super.initState();
+    sub = sb.from('group_settings').stream(primaryKey: ['id']).eq('id', 'main').listen((r) {
+      if (mounted) setState(() => url = r.isEmpty ? null : r.first['avatar_url'] as String?);
+    }, onError: (_) {});
+  }
+
+  @override
+  void dispose() {
+    sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = Icon(Icons.groups_outlined, color: Colors.white, size: widget.s * .5);
+    return Container(
+      width: widget.s,
+      height: widget.s,
+      clipBehavior: Clip.antiAlias,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(colors: [Color(0xFF6C7BFF), Color(0xFF9400FF)]),
+      ),
+      child: (url == null || url!.isEmpty)
+          ? icon
+          : Image.network(url!,
+              fit: BoxFit.cover,
+              width: widget.s,
+              height: widget.s,
+              errorBuilder: (_, __, ___) => Center(child: icon)),
+    );
+  }
+}
+
+class CropPage extends StatefulWidget {
+  final Uint8List bytes;
+  const CropPage({super.key, required this.bytes});
+  @override
+  State<CropPage> createState() => _CropPageState();
+}
+
+class _CropPageState extends State<CropPage> {
+  final boundaryKey = GlobalKey();
+  final tc = TransformationController();
+  double iw = 0, ih = 0;
+  int turns = 0;
+  bool busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    decodeImageFromList(widget.bytes).then((img) {
+      if (!mounted) return;
+      setState(() {
+        iw = img.width.toDouble();
+        ih = img.height.toDouble();
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _center());
+    });
+  }
+
+  @override
+  void dispose() {
+    tc.dispose();
+    super.dispose();
+  }
+
+  double get _size => MediaQuery.of(context).size.width;
+  double get _ew => turns.isOdd ? ih : iw;
+  double get _eh => turns.isOdd ? iw : ih;
+  double get _scale => _size / (_ew < _eh ? _ew : _eh);
+
+  void _center() {
+    if (iw == 0) return;
+    final cw = _ew * _scale, ch = _eh * _scale;
+    tc.value = Matrix4.identity()..translate(-(cw - _size) / 2, -(ch - _size) / 2);
+  }
+
+  void _rotate() {
+    setState(() => turns = (turns + 1) % 4);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _center());
+  }
+
+  Future<void> _done() async {
+    setState(() => busy = true);
+    try {
+      final b = boundaryKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final img = await b.toImage(pixelRatio: 640 / b.size.width);
+      final bd = await img.toByteData(format: ui.ImageByteFormat.png);
+      if (mounted) Navigator.pop(context, bd!.buffer.asUint8List());
+    } catch (_) {
+      if (mounted) {
+        setState(() => busy = false);
+        snack(context, 'Gagal memotong foto');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = _size;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        title: const Text('Atur foto', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        actions: [
+          TextButton(
+            onPressed: (busy || iw == 0) ? null : _done,
+            child: const Text('Selesai', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+      body: iw == 0
+          ? const Center(child: CircularProgressIndicator())
+          : Column(children: [
+              Expanded(
+                child: Center(
+                  child: SizedBox(
+                    width: size,
+                    height: size,
+                    child: Stack(children: [
+                      RepaintBoundary(
+                        key: boundaryKey,
+                        child: ClipRect(
+                          child: InteractiveViewer(
+                            transformationController: tc,
+                            constrained: false,
+                            minScale: 1,
+                            maxScale: 6,
+                            boundaryMargin: EdgeInsets.zero,
+                            child: SizedBox(
+                              width: _ew * _scale,
+                              height: _eh * _scale,
+                              child: RotatedBox(
+                                quarterTurns: turns,
+                                child: Image.memory(widget.bytes, fit: BoxFit.fill),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      IgnorePointer(child: CustomPaint(size: Size(size, size), painter: _CircleMask())),
+                    ]),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  const Text('Geser & cubit untuk mengatur', style: TextStyle(color: mu, fontSize: 13)),
+                  IconButton(
+                    onPressed: _rotate,
+                    icon: const Icon(Icons.rotate_90_degrees_cw_outlined, color: Colors.white),
+                  ),
+                ]),
+              ),
+            ]),
+    );
+  }
+}
+
+class _CircleMask extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final p = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(rect)
+      ..addOval(rect);
+    canvas.drawPath(p, Paint()..color = Colors.black54);
+    canvas.drawOval(
+        rect.deflate(1),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          ..color = Colors.white70);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class UserProfilePage extends StatelessWidget {
+  final Map<String, dynamic> me, user;
+  final String? fromRoom;
+  const UserProfilePage({super.key, required this.me, required this.user, this.fromRoom});
+
+  @override
+  Widget build(BuildContext context) {
+    final myId = sb.auth.currentUser!.id;
+    final rank = (user['rank'] ?? 'user') as String;
+    final r = ranks[rank] ?? ranks['user']!;
+    final name = user['username'] as String;
+    final isMe = user['id'] == myId;
+    return Stack(children: [
+      const Positioned.fill(child: OceanBg()),
+      Positioned.fill(child: ColoredBox(color: Colors.black.withOpacity(kScrim))),
+      Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, scrolledUnderElevation: 0),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+            child: Column(children: [
+              const SizedBox(height: 16),
+              avatar(rank, s: 132, url: user['avatar_url'] as String?),
+              const SizedBox(height: 18),
+              RankText(name, rank, size: 28),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.fromLTRB(10, 5, 14, 5),
+                decoration: BoxDecoration(
+                  color: bg.withOpacity(.55),
+                  borderRadius: BorderRadius.circular(99),
+                  border: Border.all(color: Colors.white.withOpacity(.2)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(r.icon, size: 16, color: r.solid),
+                  const SizedBox(width: 6),
+                  RankText(r.name, rank, size: 13),
+                ]),
+              ),
+              const SizedBox(height: 28),
+              if (!isMe)
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: GlassButton(
+                    icon: const Icon(Icons.chat_bubble_outline),
+                    label: 'Kirim pesan',
+                    onPressed: () {
+                      final room = dmRoom(myId, user['id'] as String);
+                      if (fromRoom == room) {
+                        Navigator.pop(context);
+                        return;
+                      }
+                      Navigator.pushReplacement(context,
+                          CupertinoPageRoute(builder: (_) => ChatRoomPage(me: me, peer: user)));
+                    },
+                  ),
+                ),
+            ]),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+class GroupProfilePage extends StatelessWidget {
+  final Map<String, dynamic> me;
+  const GroupProfilePage({super.key, required this.me});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDev = me['rank'] == 'developer';
+    return Stack(children: [
+      const Positioned.fill(child: OceanBg()),
+      Positioned.fill(child: ColoredBox(color: Colors.black.withOpacity(kScrim))),
+      Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, scrolledUnderElevation: 0),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+            child: Column(children: [
+              const SizedBox(height: 16),
+              SizedBox(
+                width: 140,
+                height: 140,
+                child: Stack(clipBehavior: Clip.none, children: [
+                  const Positioned(left: 4, top: 4, child: GroupAvatar(s: 132)),
+                  if (isDev)
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: GestureDetector(onTap: () => changeGroupAvatar(context), child: camBadge()),
+                    ),
+                ]),
+              ),
+              const SizedBox(height: 18),
+              const Text('Chat Utama', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 6),
+              const Text('Grup umum', style: TextStyle(color: Colors.white70)),
+              const SizedBox(height: 28),
+              if (isDev)
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: GlassButton(
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: 'Ubah foto grup',
+                    onPressed: () => changeGroupAvatar(context),
+                  ),
+                ),
+            ]),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+// =====================================================================
+// MENU LONG-PRESS PESAN (gaya iOS)
+// =====================================================================
+const kQuick = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥'];
+
+const kEmojiCats = <String, String>{
+  'Wajah':
+      '😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😋 😛 😜 🤪 😝 🤑 🤗 🤭 🤫 🤔 🤐 😐 😑 😶 😏 😒 🙄 😬 😌 😔 😪 😴 😷 🤒 🤕 🤢 🤮 🥵 🥶 🥴 😵 🤯 🤠 🥳 😎 🤓 🧐 😕 😟 🙁 😮 😯 😲 😳 🥺 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 🥱 😤 😡 😠 🤬 😈 👿 💀 💩 🤡 👻 👽 🤖',
+  'Gestur':
+      '👍 👎 👌 ✌️ 🤞 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ ✋ 🤚 🖖 👋 🤝 🙏 ✍️ 💪 👏 🙌 👐 🤲 🙈 🙉 🙊',
+  'Hati & simbol':
+      '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 ❣️ 💕 💞 💓 💗 💖 💘 💝 💯 💢 💥 💫 💦 💨 🔥 ✨ 🎉 🎊',
+  'Hewan & alam':
+      '🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🦄 🐝 🦋 🌸 🌹 🌻 🌈 ⭐ 🌙 ☀️ ⚡ ❄️',
+  'Makanan':
+      '🍎 🍌 🍉 🍇 🍓 🍒 🍑 🥭 🍍 🥑 🍕 🍔 🍟 🌭 🍿 🍜 🍣 🍩 🍪 🎂 🍫 🍭 ☕ 🍺 🥤',
+  'Aktivitas & objek':
+      '⚽ 🏀 🏈 🎮 🎯 🎵 🎤 🎧 📱 💻 📷 🎁 🏆 🚗 ✈️ 🚀 💡 💰 📌 🔔',
+  'Tanda':
+      '✅ ❌ ⭕ ❓ ❗ ‼️ ⚠️ 🚫 💤 🆗 🔴 🟢 🔵 🟡 ➕ ➖ ✔️ ➡️ ⬆️ 🔁',
+};
+
+Future<String?> showEmojiSheet(BuildContext c) => showModalBottomSheet<String>(
+      context: c,
+      backgroundColor: card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (ctx) => SizedBox(
+        height: MediaQuery.of(ctx).size.height * .6,
+        child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 24), children: [
+          for (final e in kEmojiCats.entries) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 0, 6),
+              child: Text(e.key, style: const TextStyle(color: mu, fontSize: 13, fontWeight: FontWeight.w600)),
+            ),
+            Wrap(spacing: 2, runSpacing: 2, children: [
+              for (final em in e.value.split(' '))
+                InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () => Navigator.pop(ctx, em),
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Text(em, style: const TextStyle(fontSize: 28)),
+                  ),
+                ),
+            ]),
+          ],
+        ]),
+      ),
+    );
+
+Future<void> showMsgMenu({
+  required BuildContext context,
+  required Rect rect,
+  required bool mine,
+  required Widget bubble,
+  required String? myEmoji,
+  required bool starred,
+  required bool canPin,
+  required bool pinned,
+  required void Function(String) onReact,
+  required VoidCallback onMore,
+  required VoidCallback onReply,
+  required VoidCallback onForward,
+  required VoidCallback onCopy,
+  required VoidCallback onStar,
+  required VoidCallback onPin,
+  required VoidCallback onDeleteMe,
+  VoidCallback? onDeleteAll,
+}) =>
+    Navigator.of(context).push(PageRouteBuilder<void>(
+      opaque: false,
+      barrierDismissible: false,
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 220),
+      reverseTransitionDuration: const Duration(milliseconds: 160),
+      pageBuilder: (_, __, ___) => _MsgMenuView(
+        rect: rect,
+        mine: mine,
+        bubble: bubble,
+        myEmoji: myEmoji,
+        starred: starred,
+        canPin: canPin,
+        pinned: pinned,
+        onReact: onReact,
+        onMore: onMore,
+        onReply: onReply,
+        onForward: onForward,
+        onCopy: onCopy,
+        onStar: onStar,
+        onPin: onPin,
+        onDeleteMe: onDeleteMe,
+        onDeleteAll: onDeleteAll,
+      ),
+      transitionsBuilder: (_, a, __, child) => FadeTransition(opacity: a, child: child),
+    ));
+
+class _Mi {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool red;
+  const _Mi(this.label, this.icon, this.onTap, {this.red = false});
+}
+
+class _MsgMenuView extends StatefulWidget {
+  final Rect rect;
+  final bool mine, starred, canPin, pinned;
+  final Widget bubble;
+  final String? myEmoji;
+  final void Function(String) onReact;
+  final VoidCallback onMore, onReply, onForward, onCopy, onStar, onPin, onDeleteMe;
+  final VoidCallback? onDeleteAll;
+  const _MsgMenuView({
+    required this.rect,
+    required this.mine,
+    required this.bubble,
+    required this.myEmoji,
+    required this.starred,
+    required this.canPin,
+    required this.pinned,
+    required this.onReact,
+    required this.onMore,
+    required this.onReply,
+    required this.onForward,
+    required this.onCopy,
+    required this.onStar,
+    required this.onPin,
+    required this.onDeleteMe,
+    required this.onDeleteAll,
+  });
+  @override
+  State<_MsgMenuView> createState() => _MsgMenuViewState();
+}
+
+class _MsgMenuViewState extends State<_MsgMenuView> {
+  bool sub = false;
+  static const red = Color(0xFFFF6B81);
+
+  void done(VoidCallback f) {
+    Navigator.of(context).pop();
+    f();
+  }
+
+  List<_Mi> items() {
+    final w = widget;
+    if (sub) {
+      return [
+        _Mi('Hapus untuk saya', Icons.visibility_off_outlined, () => done(w.onDeleteMe)),
+        _Mi('Hapus untuk semua orang', Icons.delete_outline, () => done(w.onDeleteAll!), red: true),
+        _Mi('Kembali', Icons.arrow_back_ios_new_rounded, () => setState(() => sub = false)),
+      ];
+    }
+    return [
+      _Mi('Balas', Icons.reply, () => done(w.onReply)),
+      _Mi('Teruskan', Icons.forward, () => done(w.onForward)),
+      _Mi('Salin', Icons.content_copy, () => done(w.onCopy)),
+      _Mi(w.starred ? 'Hapus bintang' : 'Beri bintang', w.starred ? Icons.star : Icons.star_border,
+          () => done(w.onStar)),
+      if (w.canPin)
+        _Mi(w.pinned ? 'Lepas sematan' : 'Sematkan pesan', Icons.push_pin_outlined, () => done(w.onPin)),
+      if (w.onDeleteAll != null)
+        _Mi('Hapus', Icons.delete_outline, () => setState(() => sub = true), red: true)
+      else
+        _Mi('Hapus untuk saya', Icons.delete_outline, () => done(w.onDeleteMe), red: true),
+    ];
+  }
+
+  Widget _pop(Alignment a, Widget child) => TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: .85, end: 1),
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutBack,
+        builder: (_, v, c) => Opacity(
+          opacity: v >= 1 ? 1.0 : ((v - .85) / .15).clamp(0.0, 1.0).toDouble(),
+          child: Transform.scale(scale: v, alignment: a, child: c),
+        ),
+        child: child,
+      );
+
+  Widget emojiBar() => Glass(
+        radius: 30,
+        blur: 16,
+        strength: .62,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+          for (final e in kQuick)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => done(() => widget.onReact(e)),
+              child: Container(
+                width: 40,
+                height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: widget.myEmoji == e ? Colors.white.withOpacity(.22) : Colors.transparent,
+                ),
+                child: Text(e, style: const TextStyle(fontSize: 26)),
+              ),
+            ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => done(widget.onMore),
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withOpacity(.18)),
+              child: const Icon(Icons.add, size: 22, color: Colors.white),
+            ),
+          ),
+        ]),
+      );
+
+  Widget menu(List<_Mi> its, double rowH) => Glass(
+        radius: 18,
+        blur: 18,
+        strength: .66,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          for (var i = 0; i < its.length; i++) ...[
+            if (i > 0) Divider(height: 1, thickness: .5, color: Colors.white.withOpacity(.14)),
+            InkWell(
+              onTap: its[i].onTap,
+              child: SizedBox(
+                height: rowH,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(children: [
+                    Expanded(
+                      child: Text(its[i].label,
+                          style: TextStyle(fontSize: 16, color: its[i].red ? red : Colors.white)),
+                    ),
+                    Icon(its[i].icon, size: 21, color: its[i].red ? red : Colors.white),
+                  ]),
+                ),
+              ),
+            ),
+          ],
+        ]),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final w = mq.size.width, h = mq.size.height;
+    final topLim = mq.padding.top + 8, botLim = h - mq.padding.bottom - 12;
+    const barH = 56.0, gap = 8.0, rowH = 50.0;
+    final its = items();
+    final menuH = its.length * rowH;
+    final rect = widget.rect;
+    final barW = (w - 24) < 364.0 ? (w - 24) : 364.0;
+    final menuW = (w - 24) < 260.0 ? (w - 24) : 260.0;
+    double leftFor(double width) {
+      final l = widget.mine ? rect.right - width : rect.left;
+      final hi = w - 12 - width;
+      return l < 12 ? 12 : (l > hi ? hi : l);
+    }
+
+    final startY = rect.top - gap - barH;
+    final endY = rect.bottom + gap + menuH;
+    var dy = 0.0;
+    if (endY > botLim) dy = botLim - endY;
+    if (startY + dy < topLim) dy = topLim - startY;
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.of(context).pop(),
+            child: ClipRect(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: ColoredBox(color: Colors.black.withOpacity(.38)),
+              ),
+            ),
+          ),
+        ),
+        Positioned.fill(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: 0, end: dy),
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, __) => Stack(children: [
+              Positioned(
+                left: leftFor(barW),
+                top: startY + v,
+                width: barW,
+                height: barH,
+                child: _pop(widget.mine ? Alignment.bottomRight : Alignment.bottomLeft, emojiBar()),
+              ),
+              Positioned(left: rect.left, top: rect.top + v, child: widget.bubble),
+              Positioned(
+                left: leftFor(menuW),
+                top: rect.bottom + gap + v,
+                width: menuW,
+                child: _pop(widget.mine ? Alignment.topRight : Alignment.topLeft, menu(its, rowH)),
+              ),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
 }
