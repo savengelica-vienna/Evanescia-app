@@ -1,0 +1,17 @@
+name: nnevapp
+description: NnevApp
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  supabase_flutter: ^2.8.0
+  ota_update: ^6.0.0
+  package_info_plus: ^8.0.0
+
+flutter:
+  uses-material-design: true
