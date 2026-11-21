@@ -10,7 +10,9 @@ dependencies:
   flutter:
     sdk: flutter
   supabase_flutter: ^2.8.0
-  ota_update: ^6.0.0
+  http: ^1.2.0
+  path_provider: ^2.1.0
+  open_filex: ^4.5.0
   package_info_plus: ^8.0.0
 
 flutter:
