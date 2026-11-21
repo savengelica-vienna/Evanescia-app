@@ -106,7 +106,131 @@ class _OceanBgState extends State<OceanBg> with SingleTickerProviderStateMixin {
       );
 }
 
-// ---------- NAV MENGAMBANG (liquid glass) ----------
+// ---------- LIQUID GLASS (kartu & tombol) ----------
+class Glass extends StatelessWidget {
+  final Widget child;
+  final double radius, blur, strength;
+  final Color tint;
+  final EdgeInsetsGeometry padding;
+  const Glass({
+    super.key,
+    required this.child,
+    this.radius = 22,
+    this.blur = 18,
+    this.strength = .58,
+    this.tint = card,
+    this.padding = EdgeInsets.zero,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final r = BorderRadius.circular(radius);
+    return ClipRRect(
+      borderRadius: r,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            borderRadius: r,
+            border: Border.all(color: Colors.white.withOpacity(.22)),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [tint.withOpacity(strength + .10), tint.withOpacity(strength - .12)],
+            ),
+          ),
+          foregroundDecoration: BoxDecoration(
+            borderRadius: r,
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Colors.white.withOpacity(.15), Colors.white.withOpacity(0)],
+              stops: const [0, .45],
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+Widget glassBox(Widget child) => Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: SizedBox(
+        width: double.infinity,
+        child: Glass(radius: 22, padding: const EdgeInsets.all(18), child: child),
+      ),
+    );
+
+class GlassButton extends StatelessWidget {
+  final Widget icon;
+  final String label;
+  final VoidCallback? onPressed;
+  final Color tint;
+  final double strength;
+  const GlassButton({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    this.tint = ac,
+    this.strength = .55,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final r = BorderRadius.circular(40);
+    return Opacity(
+      opacity: onPressed == null ? .5 : 1,
+      child: ClipRRect(
+        borderRadius: r,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: r,
+              border: Border.all(color: Colors.white.withOpacity(.42), width: 1.2),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [tint.withOpacity(strength + .25), tint.withOpacity(strength - .12)],
+              ),
+            ),
+            foregroundDecoration: BoxDecoration(
+              borderRadius: r,
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.white.withOpacity(.30), Colors.white.withOpacity(0)],
+                stops: const [0, .55],
+              ),
+            ),
+            child: Material(
+              type: MaterialType.transparency,
+              child: InkWell(
+                onTap: onPressed,
+                borderRadius: r,
+                child: Center(
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    IconTheme(data: const IconThemeData(color: Colors.white, size: 20), child: icon),
+                    const SizedBox(width: 8),
+                    Text(label,
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------- NAV MENGAMBANG (liquid glass, bubble aktif lebih besar dari bar) ----------
 class GlassNav extends StatelessWidget {
   final int index;
   final ValueChanged<int> onTap;
@@ -115,75 +239,130 @@ class GlassNav extends StatelessWidget {
   static const _icons = [Icons.home_outlined, Icons.chat_bubble_outline, Icons.person_outline];
   static const _fill = [Icons.home_rounded, Icons.chat_bubble_rounded, Icons.person_rounded];
   static const _labels = ['Home', 'Chat', 'Profile'];
+  static const _barH = 68.0; // tinggi bar
+  static const _over = 10.0; // bubble aktif melebihi bar atas & bawah
+  static const _side = 4.0; // bubble aktif sedikit melebar ke samping
 
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).viewPadding.bottom;
+    final bubbleR = BorderRadius.circular((_barH + _over * 2) / 2);
     return Padding(
       padding: EdgeInsets.fromLTRB(28, 0, 28, 12 + bottom),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(34),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-          child: Container(
-            height: 68,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(34),
-              border: Border.all(color: Colors.white.withOpacity(.30)),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Colors.white.withOpacity(.22), Colors.white.withOpacity(.07)],
-              ),
-            ),
-            child: Stack(children: [
-              AnimatedAlign(
-                duration: const Duration(milliseconds: 380),
-                curve: Curves.easeOutBack,
-                alignment: Alignment(index - 1.0, 0),
-                child: FractionallySizedBox(
-                  widthFactor: 1 / 3,
-                  heightFactor: 1,
-                  child: Padding(
-                    padding: const EdgeInsets.all(6),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(28),
-                        color: Colors.white.withOpacity(.22),
-                        border: Border.all(color: Colors.white.withOpacity(.35)),
+      child: SizedBox(
+        height: _barH,
+        child: LayoutBuilder(builder: (context, c) {
+          final slot = c.maxWidth / 3;
+          return Stack(clipBehavior: Clip.none, children: [
+            // bar kaca
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(34),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(34),
+                      border: Border.all(color: Colors.white.withOpacity(.32)),
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Colors.white.withOpacity(.24), Colors.white.withOpacity(.07)],
                       ),
                     ),
                   ),
                 ),
               ),
-              Positioned.fill(
-                child: Row(children: [
-                  for (var i = 0; i < 3; i++)
-                    Expanded(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => onTap(i),
-                        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                          AnimatedScale(
-                            scale: index == i ? 1.12 : 1,
-                            duration: const Duration(milliseconds: 250),
-                            child: Icon(index == i ? _fill[i] : _icons[i],
-                                size: 24, color: index == i ? Colors.white : Colors.white70),
+            ),
+            // bubble aktif: lebih besar dari bar, kaca bening seperti lensa
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 450),
+              curve: Curves.easeOutBack,
+              left: index * slot - _side,
+              top: -_over,
+              width: slot + _side * 2,
+              height: _barH + _over * 2,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: bubbleR,
+                    boxShadow: [
+                      BoxShadow(color: Colors.white.withOpacity(.20), blurRadius: 18, spreadRadius: -2),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: bubbleR,
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 3, sigmaY: 3),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: bubbleR,
+                          border: Border.all(color: Colors.white.withOpacity(.62), width: 1.4),
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              Colors.white.withOpacity(.42),
+                              Colors.white.withOpacity(.10),
+                              Colors.white.withOpacity(.24),
+                            ],
                           ),
-                          const SizedBox(height: 2),
-                          Text(_labels[i],
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: index == i ? Colors.white : Colors.white70)),
-                        ]),
+                        ),
+                        child: Align(
+                          alignment: const Alignment(0, -.78),
+                          child: FractionallySizedBox(
+                            widthFactor: .62,
+                            heightFactor: .2,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(99),
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [Colors.white.withOpacity(.55), Colors.white.withOpacity(0)],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                ]),
+                  ),
+                ),
               ),
-            ]),
-          ),
-        ),
+            ),
+            // ikon & label (yang aktif di-zoom)
+            Positioned.fill(
+              child: Row(children: [
+                for (var i = 0; i < 3; i++)
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => onTap(i),
+                      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        AnimatedScale(
+                          scale: index == i ? 1.3 : 1,
+                          duration: const Duration(milliseconds: 380),
+                          curve: Curves.easeOutBack,
+                          child: Icon(index == i ? _fill[i] : _icons[i],
+                              size: 24, color: index == i ? Colors.white : Colors.white70),
+                        ),
+                        SizedBox(height: index == i ? 4 : 2),
+                        AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 250),
+                          style: TextStyle(
+                              fontSize: index == i ? 12 : 11,
+                              fontWeight: index == i ? FontWeight.w700 : FontWeight.w600,
+                              color: index == i ? Colors.white : Colors.white70),
+                          child: Text(_labels[i]),
+                        ),
+                      ]),
+                    ),
+                  ),
+              ]),
+            ),
+          ]);
+        }),
       ),
     );
   }
@@ -564,7 +743,7 @@ class ProfilePage extends StatelessWidget {
     final r = ranks[rank] ?? ranks['user']!;
     final name = me['username'] as String;
     return Column(children: [
-      box(Column(children: [
+      glassBox(Column(children: [
         const SizedBox(height: 8),
         Container(
           width: 84,
@@ -590,7 +769,7 @@ class ProfilePage extends StatelessWidget {
         )),
         const SizedBox(height: 8),
       ])),
-      box(Column(children: [
+      glassBox(Column(children: [
         infoRow(Icons.badge_outlined, 'Username', Text(name, style: const TextStyle(fontWeight: FontWeight.w700))),
         InkWell(
           onTap: () => showRankList(context),
@@ -609,13 +788,10 @@ class ProfilePage extends StatelessWidget {
         SizedBox(
           width: double.infinity,
           height: 48,
-          child: FilledButton.icon(
+          child: GlassButton(
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ManageUsersPage(myRank: rank))),
             icon: const Icon(Icons.group_add_outlined),
-            label: const Text('Kelola User'),
-            style: FilledButton.styleFrom(
-                backgroundColor: ac,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            label: 'Kelola User',
           ),
         ),
         const SizedBox(height: 10),
@@ -623,7 +799,9 @@ class ProfilePage extends StatelessWidget {
       SizedBox(
         width: double.infinity,
         height: 48,
-        child: OutlinedButton.icon(
+        child: GlassButton(
+          tint: Colors.white,
+          strength: .16,
           onPressed: () async {
             final ok = await showDialog<bool>(
               context: context,
@@ -645,10 +823,7 @@ class ProfilePage extends StatelessWidget {
             if (ok == true) sb.auth.signOut();
           },
           icon: const Icon(Icons.logout),
-          label: const Text('Keluar'),
-          style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: line),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+          label: 'Keluar',
         ),
       ),
     ]);
@@ -688,7 +863,7 @@ class UpdatePage extends StatelessWidget {
   Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Home', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
         const SizedBox(height: 14),
-        box(Column(children: [
+        glassBox(Column(children: [
           infoRow(Icons.sell_outlined, 'Build terpasang', Text('$cur', style: const TextStyle(fontWeight: FontWeight.w700))),
           infoRow(Icons.refresh, 'Versi terbaru',
               Text(cfg == null ? '-' : '${cfg!['version_name']} (${cfg!['version_code']})',
@@ -697,13 +872,10 @@ class UpdatePage extends StatelessWidget {
         SizedBox(
           width: double.infinity,
           height: 50,
-          child: FilledButton.icon(
+          child: GlassButton(
             onPressed: onCheck,
             icon: const Icon(Icons.refresh),
-            label: const Text('Cek update'),
-            style: FilledButton.styleFrom(
-                backgroundColor: ac,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            label: 'Cek update',
           ),
         ),
       ]);
@@ -992,13 +1164,9 @@ class _ChatListPageState extends State<ChatListPage> {
       children: [
         const Text('Chat', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
         const SizedBox(height: 14),
-        Container(
+        Glass(
+          radius: 22,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-          decoration: BoxDecoration(
-            color: card.withOpacity(.88),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: line),
-          ),
           child: Column(children: [
             for (var i = 0; i < items.length; i++) ...[
               if (i > 0) const Divider(height: 1, color: line, indent: 66),
