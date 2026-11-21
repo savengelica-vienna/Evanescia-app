@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:ota_update/ota_update.dart';
+import 'dart:io';
+import 'package:http/http.dart' as http;
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -506,38 +509,46 @@ class _UpdateDialogState extends State<UpdateDialog> {
     start();
   }
 
-  void start() {
+  Future<void> start() async {
     try {
-      OtaUpdate()
-          .execute(widget.cfg['apk_url'] as String, destinationFilename: 'nnevapp.apk')
-          .listen((e) {
-        if (!mounted) return;
-        setState(() {
-          switch (e.status) {
-            case OtaStatus.DOWNLOADING:
-              pct = (double.tryParse(e.value ?? '0') ?? 0) / 100;
-              msg = 'Mengunduh ${e.value}%';
-              break;
-            case OtaStatus.INSTALLING:
-              pct = 1;
-              msg = 'Membuka installer...';
-              break;
-            default:
-              err = true;
-              msg = 'Gagal: ${e.status.name}';
-          }
-        });
-      }, onError: (_) {
-        if (mounted) {
+      final req = http.Request('GET', Uri.parse(widget.cfg['apk_url'] as String));
+      final res = await http.Client().send(req);
+      if (res.statusCode != 200) throw Exception('http ${res.statusCode}');
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/nnevapp.apk');
+      final sink = file.openWrite();
+      final total = res.contentLength ?? 0;
+      var got = 0;
+      await for (final chunk in res.stream) {
+        sink.add(chunk);
+        got += chunk.length;
+        if (total > 0 && mounted) {
           setState(() {
-            err = true;
-            msg = 'Gagal mengunduh';
+            pct = got / total;
+            msg = 'Mengunduh ${(pct * 100).toInt()}%';
           });
         }
+      }
+      await sink.close();
+      if (!mounted) return;
+      setState(() {
+        pct = 1;
+        msg = 'Membuka installer...';
       });
+      final r = await OpenFilex.open(file.path, type: 'application/vnd.android.package-archive');
+      if (r.type != ResultType.done && mounted) {
+        setState(() {
+          err = true;
+          msg = 'Izinkan install dari sumber ini, lalu coba lagi';
+        });
+      }
     } catch (_) {
-      err = true;
-      msg = 'Gagal mengunduh';
+      if (mounted) {
+        setState(() {
+          err = true;
+          msg = 'Gagal mengunduh';
+        });
+      }
     }
   }
 
