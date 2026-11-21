@@ -369,7 +369,7 @@ class _HomeState extends State<Home> {
           return Scaffold(
             body: SafeArea(
               child: tab == 1
-                  ? ChatPage(me: me)
+                  ? ChatListPage(me: me)
                   : ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 20), children: [pages[tab]]),
             ),
             bottomNavigationBar: NavigationBar(
@@ -663,15 +663,116 @@ Widget avatar(String rank, {double s = 34}) {
 }
 
 // ---------- CHAT ----------
-class ChatPage extends StatefulWidget {
+String dmRoom(String a, String b) => a.compareTo(b) < 0 ? 'dm_${a}_$b' : 'dm_${b}_$a';
+
+class ChatListPage extends StatefulWidget {
   final Map<String, dynamic> me;
-  const ChatPage({super.key, required this.me});
+  const ChatListPage({super.key, required this.me});
   @override
-  State<ChatPage> createState() => _ChatPageState();
+  State<ChatListPage> createState() => _ChatListPageState();
 }
 
-class _ChatPageState extends State<ChatPage> {
+class _ChatListPageState extends State<ChatListPage> {
+  List<Map<String, dynamic>> users = [];
+  StreamSubscription? sub;
+
+  @override
+  void initState() {
+    super.initState();
+    sub = sb.from('profiles').stream(primaryKey: ['id']).order('username').listen((r) {
+      if (mounted) setState(() => users = r);
+    });
+  }
+
+  @override
+  void dispose() {
+    sub?.cancel();
+    super.dispose();
+  }
+
+  void open(Map<String, dynamic>? peer) => Navigator.push(
+      context, MaterialPageRoute(builder: (_) => ChatRoomPage(me: widget.me, peer: peer)));
+
+  @override
+  Widget build(BuildContext context) {
+    final myId = sb.auth.currentUser!.id;
+    final others = users.where((u) => u['id'] != myId).toList();
+    return ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 20), children: [
+      const Text('Chat', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 14),
+      InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => open(null),
+        child: box(Row(children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(colors: [Color(0xFF6C7BFF), Color(0xFF9400FF)]),
+            ),
+            child: const Icon(Icons.groups_outlined, color: Colors.white),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              Text('Grup untuk semua user', style: TextStyle(color: mu, fontSize: 12)),
+            ]),
+          ),
+          const Icon(Icons.chevron_right, color: mu),
+        ])),
+      ),
+      const Padding(
+        padding: EdgeInsets.symmetric(vertical: 6),
+        child: Text('Pesan pribadi', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+      ),
+      if (others.isEmpty)
+        const Padding(
+          padding: EdgeInsets.all(20),
+          child: Center(child: Text('Belum ada user lain', style: TextStyle(color: mu))),
+        )
+      else
+        box(Column(
+          children: others.map((u) {
+            final rk = (u['rank'] ?? 'user') as String;
+            return InkWell(
+              onTap: () => open(u),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(children: [
+                  avatar(rk, s: 42),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      RankText(u['username'] as String, rk),
+                      Text((ranks[rk] ?? ranks['user']!).name,
+                          style: const TextStyle(color: mu, fontSize: 12)),
+                    ]),
+                  ),
+                  const Icon(Icons.chevron_right, color: mu),
+                ]),
+              ),
+            );
+          }).toList(),
+        )),
+    ]);
+  }
+}
+
+class ChatRoomPage extends StatefulWidget {
+  final Map<String, dynamic> me;
+  final Map<String, dynamic>? peer; // null = Chat Utama (grup)
+  const ChatRoomPage({super.key, required this.me, this.peer});
+  @override
+  State<ChatRoomPage> createState() => _ChatRoomPageState();
+}
+
+class _ChatRoomPageState extends State<ChatRoomPage> {
   final ctl = TextEditingController();
+  late final String room = widget.peer == null
+      ? 'main'
+      : dmRoom(sb.auth.currentUser!.id, widget.peer!['id'] as String);
   List<Map<String, dynamic>> msgs = [], reacts = [];
   Map<String, Map<String, dynamic>> profs = {};
   final subs = <StreamSubscription>[];
@@ -685,6 +786,7 @@ class _ChatPageState extends State<ChatPage> {
     subs.add(sb
         .from('messages')
         .stream(primaryKey: ['id'])
+        .eq('room', room)
         .order('created_at', ascending: false)
         .limit(100)
         .listen((r) {
@@ -709,7 +811,7 @@ class _ChatPageState extends State<ChatPage> {
     if (t.isEmpty) return;
     ctl.clear();
     try {
-      await sb.from('messages').insert({'body': t});
+      await sb.from('messages').insert({'body': t, 'room': room});
     } catch (_) {
       if (mounted) snack(context, 'Gagal mengirim pesan');
     }
@@ -731,7 +833,8 @@ class _ChatPageState extends State<ChatPage> {
 
   void pick(Map<String, dynamic> m, bool mine) {
     final id = m['id'] as String;
-    final staff = widget.me['rank'] == 'developer' || widget.me['rank'] == 'helper';
+    final staff = widget.peer == null &&
+        (widget.me['rank'] == 'developer' || widget.me['rank'] == 'helper');
     showModalBottomSheet(
       context: context,
       backgroundColor: card,
@@ -845,13 +948,22 @@ class _ChatPageState extends State<ChatPage> {
   @override
   Widget build(BuildContext context) {
     final uid = sb.auth.currentUser!.id;
-    return Column(children: [
-      Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: const BoxDecoration(color: card, border: Border(bottom: BorderSide(color: line))),
-        child: const Text('Chat Umum', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+    final peer = widget.peer;
+    final prk = (peer?['rank'] ?? 'user') as String;
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: card,
+        title: peer == null
+            ? const Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))
+            : Row(children: [
+                avatar(prk, s: 32),
+                const SizedBox(width: 10),
+                RankText(peer['username'] as String, prk, size: 16),
+              ]),
       ),
+      body: SafeArea(
+        top: false,
+        child: Column(children: [
       Expanded(
         child: msgs.isEmpty
             ? const Center(child: Text('Belum ada pesan. Mulai obrolan!', style: TextStyle(color: mu)))
@@ -892,7 +1004,9 @@ class _ChatPageState extends State<ChatPage> {
           ),
         ]),
       ),
-    ]);
+    ]),
+      ),
+    );
   }
 }
 
