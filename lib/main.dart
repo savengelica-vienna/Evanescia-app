@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show Random;
 import 'dart:ui' show ImageFilter;
 import 'dart:ui' as ui;
 import 'dart:typed_data';
@@ -1066,6 +1067,16 @@ Widget avatar(String rank, {double s = 34, String? url}) {
 // ---------- CHAT ----------
 String dmRoom(String a, String b) => a.compareTo(b) < 0 ? 'dm_${a}_$b' : 'dm_${b}_$a';
 
+String newId() {
+  final r = Random.secure();
+  final b = List<int>.generate(16, (_) => r.nextInt(256));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  String h(int i) => b[i].toRadixString(16).padLeft(2, '0');
+  return '${h(0)}${h(1)}${h(2)}${h(3)}-${h(4)}${h(5)}-${h(6)}${h(7)}-${h(8)}${h(9)}-'
+      '${h(10)}${h(11)}${h(12)}${h(13)}${h(14)}${h(15)}';
+}
+
 class ChatListPage extends StatefulWidget {
   final Map<String, dynamic> me;
   const ChatListPage({super.key, required this.me});
@@ -1076,6 +1087,7 @@ class ChatListPage extends StatefulWidget {
 class _ChatListPageState extends State<ChatListPage> {
   List<Map<String, dynamic>> users = [], msgs = [], hides = [];
   final subs = <StreamSubscription>[];
+  final acked = <String>{};
 
   @override
   void initState() {
@@ -1090,6 +1102,7 @@ class _ChatListPageState extends State<ChatListPage> {
         .limit(300)
         .listen((r) {
       if (mounted) setState(() => msgs = r);
+      _ack(r);
     }));
     subs.add(sb.from('message_hides').stream(primaryKey: ['message_id', 'user_id']).listen((r) {
       if (mounted) setState(() => hides = r);
@@ -1102,6 +1115,26 @@ class _ChatListPageState extends State<ChatListPage> {
       x.cancel();
     }
     super.dispose();
+  }
+
+  // Tandai pesan orang lain sebagai "sampai" (centang dua abu-abu)
+  Future<void> _ack(List<Map<String, dynamic>> r) async {
+    final me = sb.auth.currentUser!.id;
+    final ids = [
+      for (final m in r)
+        if (m['user_id'] != me && !acked.contains(m['id'])) m['id'] as String
+    ];
+    if (ids.isEmpty) return;
+    acked.addAll(ids);
+    try {
+      await sb.from('message_receipts').upsert(
+        [for (final id in ids) {'message_id': id}],
+        onConflict: 'message_id,user_id',
+        ignoreDuplicates: true,
+      );
+    } catch (_) {
+      acked.removeAll(ids);
+    }
   }
 
   void open(Map<String, dynamic>? peer) => Navigator.push(
@@ -1235,6 +1268,10 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   Map<String, Map<String, dynamic>> profs = {};
   Set<String> hidden = {};
   Set<String> stars = {};
+  Set<String> gone = {};
+  Map<String, int> rstat = {};
+  final pending = <Map<String, dynamic>>[];
+  final readSent = <String>{};
   Map<String, dynamic>? replyTo;
   final focus = FocusNode();
   final seen = <String>{};
@@ -1262,11 +1299,33 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
         seen.addAll(r.map((m) => m['id'] as String));
         loaded = true;
       }
-      if (mounted) setState(() => msgs = r);
+      if (mounted) {
+        setState(() {
+          msgs = r;
+          pending.removeWhere((p) => r.any((m) => m['id'] == p['id']));
+        });
+        _markRead(r);
+      }
     }));
     subs.add(sb.from('reactions').stream(primaryKey: ['message_id', 'user_id']).listen((r) {
       if (mounted) setState(() => reacts = r);
     }));
+    subs.add(sb
+        .from('message_receipts')
+        .stream(primaryKey: ['message_id', 'user_id'])
+        .order('delivered_at', ascending: false)
+        .limit(600)
+        .listen((r) {
+      final me = sb.auth.currentUser!.id;
+      final out = <String, int>{};
+      for (final x in r) {
+        if (x['user_id'] == me) continue;
+        final lvl = x['read_at'] != null ? 2 : 1;
+        final k = x['message_id'] as String;
+        if ((out[k] ?? 0) < lvl) out[k] = lvl;
+      }
+      if (mounted) setState(() => rstat = out);
+    }, onError: (_) {}));
     subs.add(sb.from('message_hides').stream(primaryKey: ['message_id', 'user_id']).listen((r) {
       if (mounted) setState(() => hidden = {for (final h in r) h['message_id'] as String});
     }));
@@ -1295,15 +1354,76 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     final t = ctl.text.trim();
     if (t.isEmpty) return;
     ctl.clear();
-    final data = <String, dynamic>{'body': t, 'room': room};
     final rt = replyTo;
-    if (rt != null) data['reply_to'] = rt['id'];
-    setState(() => replyTo = null);
+    final p = <String, dynamic>{
+      'id': newId(),
+      'user_id': sb.auth.currentUser!.id,
+      'body': t,
+      'room': room,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+      'reply_to': rt?['id'],
+      '_st': 'sending',
+    };
+    setState(() {
+      replyTo = null;
+      pending.add(p);
+    });
+    await _dosend(p);
+  }
+
+  Future<void> _dosend(Map<String, dynamic> p) async {
+    final data = <String, dynamic>{'id': p['id'], 'body': p['body'], 'room': p['room']};
+    if (p['reply_to'] != null) data['reply_to'] = p['reply_to'];
     try {
       await sb.from('messages').insert(data);
+      if (mounted) setState(() => p['_st'] = 'sent');
+    } on PostgrestException catch (e) {
+      if (e.code == '23505') {
+        if (mounted) setState(() => p['_st'] = 'sent');
+      } else if (mounted) {
+        setState(() => p['_st'] = 'failed');
+        snack(context, 'Gagal mengirim. Ketuk pesan untuk kirim ulang');
+      }
     } catch (_) {
-      if (mounted) snack(context, 'Gagal mengirim pesan');
+      if (mounted) {
+        setState(() => p['_st'] = 'failed');
+        snack(context, 'Gagal mengirim. Ketuk pesan untuk kirim ulang');
+      }
     }
+  }
+
+  void retry(Map<String, dynamic> p) {
+    setState(() => p['_st'] = 'sending');
+    _dosend(p);
+  }
+
+  Future<void> _markRead(List<Map<String, dynamic>> r) async {
+    final me = sb.auth.currentUser!.id;
+    final ids = [
+      for (final m in r)
+        if (m['user_id'] != me && !readSent.contains(m['id'])) m['id'] as String
+    ];
+    if (ids.isEmpty) return;
+    readSent.addAll(ids);
+    final now = DateTime.now().toUtc().toIso8601String();
+    try {
+      await sb.from('message_receipts').upsert(
+        [for (final id in ids) {'message_id': id, 'read_at': now}],
+        onConflict: 'message_id,user_id',
+      );
+    } catch (_) {
+      readSent.removeAll(ids);
+    }
+  }
+
+  Widget tick(Map<String, dynamic> m) {
+    final st = m['_st'];
+    if (st == 'sending') return const Icon(Icons.schedule, size: 13, color: Colors.white70);
+    if (st == 'failed') return const Icon(Icons.error_outline, size: 14, color: Color(0xFFFF6B81));
+    final lvl = rstat[m['id']] ?? 0;
+    if (lvl >= 2) return const Icon(Icons.done_all, size: 15, color: Color(0xFF53BDEB));
+    if (lvl == 1) return const Icon(Icons.done_all, size: 15, color: Colors.white70);
+    return const Icon(Icons.check, size: 14, color: Colors.white70);
   }
 
   Future<void> react(String mid, String emoji) async {
@@ -1321,18 +1441,26 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   }
 
   Future<void> hideForMe(String id) async {
+    setState(() => gone.add(id)); // langsung hilang, tidak menunggu server
     try {
       await sb.from('message_hides').insert({'message_id': id});
     } catch (_) {
-      if (mounted) snack(context, 'Gagal menghapus pesan');
+      if (mounted) {
+        setState(() => gone.remove(id));
+        snack(context, 'Gagal menghapus pesan');
+      }
     }
   }
 
   Future<void> deleteAll(String id) async {
+    setState(() => gone.add(id)); // langsung hilang di layar kamu
     try {
       await sb.from('messages').delete().eq('id', id);
     } catch (_) {
-      if (mounted) snack(context, 'Gagal menghapus pesan');
+      if (mounted) {
+        setState(() => gone.remove(id));
+        snack(context, 'Gagal menghapus pesan');
+      }
     }
   }
 
@@ -1579,13 +1707,16 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
             ],
             if (pinned) ...[const Icon(Icons.push_pin, size: 10, color: mu), const SizedBox(width: 3)],
             Text(time, style: const TextStyle(color: mu, fontSize: 10)),
+            if (mine) ...[const SizedBox(width: 3), tick(m)],
           ]),
         ),
       ]),
     );
     final content = Builder(
       builder: (bctx) => GestureDetector(
+        onTap: m['_st'] == 'failed' ? () => retry(m) : null,
         onLongPress: () {
+          if (m['_st'] != null) return;
           final rb = bctx.findRenderObject() as RenderBox;
           final off = rb.localToGlobal(Offset.zero);
           pick(m, mine, off & rb.size, bodyW);
@@ -1786,7 +1917,11 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   @override
   Widget build(BuildContext context) {
     final uid = sb.auth.currentUser!.id;
-    vis = msgs.where((m) => !hidden.contains(m['id'])).toList();
+    final msgIds = {for (final m in msgs) m['id']};
+    vis = [
+      ...pending.reversed.where((p) => !msgIds.contains(p['id']) && !gone.contains(p['id'])),
+      ...msgs.where((m) => !hidden.contains(m['id']) && !gone.contains(m['id'])),
+    ];
     final pins = isGroup
         ? (vis.where((m) => m['pinned_at'] != null).toList()
           ..sort((a, b) => (b['pinned_at'] as String).compareTo(a['pinned_at'] as String)))
