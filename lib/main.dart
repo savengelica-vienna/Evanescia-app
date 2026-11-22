@@ -880,7 +880,7 @@ class _HomeState extends State<Home> {
   int? shownFor;
   bool cleaned = false, askedWa = false;
   Map<String, dynamic>? cfg;
-  StreamSubscription? sub;
+  StreamSubscription? sub, gsub;
   late final Stream<List<Map<String, dynamic>>> prof =
       sb.from('profiles').stream(primaryKey: ['id']).eq('id', sb.auth.currentUser!.id);
 
@@ -892,6 +892,12 @@ class _HomeState extends State<Home> {
       if (mounted) setState(() {});
       maybePrompt();
     });
+    // nama & deskripsi grup (bisa diedit Developer) dipakai di banyak layar
+    gsub = sb.from('group_settings').stream(primaryKey: ['id']).eq('id', 'main').listen((r) {
+      if (r.isEmpty) return;
+      final n = _s(r.first['name']), d = _s(r.first['description']);
+      groupInfo.value = (n.isEmpty ? 'Chat Utama' : n, d.isEmpty ? 'Grup umum' : d);
+    }, onError: (_) {});
     sub = sb.from('app_config').stream(primaryKey: ['id']).eq('id', 'android').listen((rows) {
       if (rows.isEmpty) return;
       cfg = rows.first;
@@ -903,6 +909,7 @@ class _HomeState extends State<Home> {
   @override
   void dispose() {
     sub?.cancel();
+    gsub?.cancel();
     super.dispose();
   }
 
@@ -1590,7 +1597,7 @@ class _ChatListPageState extends State<ChatListPage> {
     final groupItems = <Widget>[
       convRow(
         leading: const GroupAvatar(s: 52),
-        title: const Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        title: const GroupText(style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         preview: g == null
             ? 'Belum ada pesan'
             : (g['deleted_at'] != null
@@ -2016,7 +2023,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   void forward(Map<String, dynamic> m) {
     final myId = sb.auth.currentUser!.id;
     final targets = <MapEntry<String, String>>[
-      const MapEntry('main', 'Chat Utama'),
+      MapEntry('main', groupInfo.value.$1),
       for (final p in profs.values)
         if (p['id'] != myId) MapEntry(dmRoom(myId, p['id'] as String), p['username'] as String),
     ];
@@ -2466,7 +2473,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
                 ? const Row(children: [
                     GroupAvatar(s: 32),
                     SizedBox(width: 10),
-                    Text('Chat Utama', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    Flexible(child: GroupText(style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
                   ])
                 : Row(children: [
                     avatar(prk, s: 32, url: pp?['avatar_url'] as String?),
@@ -3268,9 +3275,18 @@ class GroupProfilePage extends StatelessWidget {
                 ]),
               ),
               const SizedBox(height: 18),
-              const Text('Chat Utama', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+              const GroupText(
+                style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800),
+                maxLines: 2,
+                align: TextAlign.center,
+              ),
               const SizedBox(height: 6),
-              const Text('Grup umum', style: TextStyle(color: Colors.white70)),
+              const GroupText(
+                desc: true,
+                style: TextStyle(color: Colors.white70),
+                maxLines: 3,
+                align: TextAlign.center,
+              ),
               const SizedBox(height: 28),
               if (isDev) ...[
                 SizedBox(
@@ -3280,6 +3296,17 @@ class GroupProfilePage extends StatelessWidget {
                     icon: const Icon(Icons.photo_library_outlined),
                     label: 'Ubah foto grup',
                     onPressed: () => changeGroupAvatar(context),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: GlassButton(
+                    icon: const Icon(Icons.edit_outlined),
+                    label: 'Ubah nama & deskripsi',
+                    onPressed: () =>
+                        showDialog<void>(context: context, builder: (_) => const GroupInfoDialog()),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -3314,7 +3341,8 @@ class ChatCleanupPage extends StatefulWidget {
 
 class _ChatCleanupPageState extends State<ChatCleanupPage> {
   static const _units = {'hour': 'Jam', 'day': 'Hari', 'month': 'Bulan'};
-  bool loading = true, saving = false, enabled = false;
+  bool loading = true, saving = false, enabled = false, cleaning = false;
+  bool delPinned = false, delStarred = false, delDm = false; // true = ikut dihapus
   String unit = 'day';
   final vc = TextEditingController(text: '7');
 
@@ -3339,11 +3367,14 @@ class _ChatCleanupPageState extends State<ChatCleanupPage> {
     try {
       final r = await sb
           .from('group_settings')
-          .select('cleanup_enabled, cleanup_value, cleanup_unit')
+          .select('cleanup_enabled, cleanup_value, cleanup_unit, cleanup_pinned, cleanup_starred, cleanup_dm')
           .eq('id', 'main')
           .maybeSingle();
       if (r != null) {
         enabled = r['cleanup_enabled'] == true;
+        delPinned = r['cleanup_pinned'] == true;
+        delStarred = r['cleanup_starred'] == true;
+        delDm = r['cleanup_dm'] == true;
         vc.text = '${r['cleanup_value'] ?? 7}';
         final u = r['cleanup_unit'];
         if (u is String && _units.containsKey(u)) unit = u;
@@ -3362,12 +3393,39 @@ class _ChatCleanupPageState extends State<ChatCleanupPage> {
     }
     setState(() => saving = true);
     try {
-      await sb.rpc('set_chat_cleanup', params: {'p_enabled': enabled, 'p_value': v, 'p_unit': unit});
+      await sb.rpc('set_chat_cleanup', params: {
+        'p_enabled': enabled,
+        'p_value': v,
+        'p_unit': unit,
+        'p_pinned': delPinned,
+        'p_starred': delStarred,
+        'p_dm': delDm,
+      });
       snack('Pengaturan tersimpan');
     } catch (e) {
       snack('Gagal menyimpan: $e');
     }
     if (mounted) setState(() => saving = false);
+  }
+
+  // Bersihkan langsung (tanpa menunggu jadwal), memakai centang yang sedang tampil
+  Future<void> cleanNow() async {
+    final what = [
+      'Semua pesan di Chat Utama${delDm ? ' dan chat pribadi (DM)' : ''}',
+      delPinned ? 'Pesan yang di-pin ikut dihapus' : 'Pesan yang di-pin dilewati',
+      delStarred ? 'Pesan berbintang ikut dihapus' : 'Pesan berbintang dilewati',
+    ];
+    final ok = await confirmDlg(
+        context, 'Bersihkan sekarang?', '${what.join('\n')}\n\nTindakan ini tidak bisa dibatalkan.', 'Bersihkan');
+    if (!ok || !mounted) return;
+    setState(() => cleaning = true);
+    try {
+      final r = await sb.rpc('clean_chat_now', params: {'p_pinned': delPinned, 'p_starred': delStarred, 'p_dm': delDm});
+      snack('${r ?? 0} pesan dihapus');
+    } catch (e) {
+      snack('Gagal membersihkan: $e');
+    }
+    if (mounted) setState(() => cleaning = false);
   }
 
   @override
@@ -3427,8 +3485,39 @@ class _ChatCleanupPageState extends State<ChatCleanupPage> {
                   ]),
                   const SizedBox(height: 14),
                   const Text(
-                    'Pesan yang disematkan tidak ikut terhapus. Server mengecek tiap jam, jadi penghapusan bisa terlambat sampai 1 jam.',
+                    'Server mengecek tiap jam, jadi penghapusan otomatis bisa terlambat sampai 1 jam.',
                     style: TextStyle(color: mu, fontSize: 12.5),
+                  ),
+                ])),
+                glassBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Yang ikut dihapus', style: TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  const Text(
+                    'Tidak dicentang = pesan itu dilewati. Berlaku untuk pembersihan otomatis dan langsung.',
+                    style: TextStyle(color: mu, fontSize: 12.5),
+                  ),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: delPinned,
+                    onChanged: (v) => setState(() => delPinned = v ?? false),
+                    title: const Text('Pesan yang di-pin'),
+                  ),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: delStarred,
+                    onChanged: (v) => setState(() => delStarred = v ?? false),
+                    title: const Text('Pesan berbintang (star)'),
+                  ),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: delDm,
+                    onChanged: (v) => setState(() => delDm = v ?? false),
+                    title: const Text('Termasuk chat pribadi (DM)'),
+                    subtitle: const Text('Kalau tidak dicentang, hanya Chat Utama yang dibersihkan.',
+                        style: TextStyle(color: mu, fontSize: 12)),
                   ),
                 ])),
                 SizedBox(
@@ -3441,6 +3530,29 @@ class _ChatCleanupPageState extends State<ChatCleanupPage> {
                     onPressed: saving ? null : save,
                   ),
                 ),
+                const SizedBox(height: 18),
+                glassBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Bersihkan langsung', style: TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Hapus semua pesan sekarang juga, tanpa menunggu jadwal. Memakai centang "Yang ikut dihapus" di atas (tidak perlu disimpan dulu).',
+                    style: TextStyle(color: mu, fontSize: 12.5),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: GlassButton(
+                      icon: cleaning
+                          ? const SizedBox(
+                              width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.delete_sweep_outlined),
+                      label: 'Bersihkan sekarang',
+                      tint: const Color(0xFFFF4D6D),
+                      onPressed: cleaning ? null : cleanNow,
+                    ),
+                  ),
+                ])),
               ]),
       ),
     ]);
@@ -4678,5 +4790,111 @@ class _SnippetEditorPageState extends State<SnippetEditorPage> {
             ],
           ),
         ),
+      );
+}
+
+
+// =====================================================================
+// NAMA & DESKRIPSI GRUP (bisa diedit Developer)
+// =====================================================================
+// (nama, deskripsi). Diisi dari tabel group_settings oleh Home.
+final groupInfo = ValueNotifier<(String, String)>(('Chat Utama', 'Grup umum'));
+
+class GroupText extends StatelessWidget {
+  final bool desc;
+  final TextStyle? style;
+  final int maxLines;
+  final TextAlign? align;
+  const GroupText({super.key, this.desc = false, this.style, this.maxLines = 1, this.align});
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<(String, String)>(
+        valueListenable: groupInfo,
+        builder: (_, v, __) => Text(
+          desc ? v.$2 : v.$1,
+          style: style,
+          maxLines: maxLines,
+          overflow: TextOverflow.ellipsis,
+          textAlign: align,
+        ),
+      );
+}
+
+class GroupInfoDialog extends StatefulWidget {
+  const GroupInfoDialog({super.key});
+  @override
+  State<GroupInfoDialog> createState() => _GroupInfoDialogState();
+}
+
+class _GroupInfoDialogState extends State<GroupInfoDialog> {
+  late final n = TextEditingController(text: groupInfo.value.$1);
+  late final d = TextEditingController(text: groupInfo.value.$2);
+  String err = '';
+  bool busy = false;
+
+  @override
+  void dispose() {
+    n.dispose();
+    d.dispose();
+    super.dispose();
+  }
+
+  Future<void> save() async {
+    final name = n.text.trim();
+    if (name.isEmpty) {
+      setState(() => err = 'Nama grup wajib diisi');
+      return;
+    }
+    setState(() {
+      busy = true;
+      err = '';
+    });
+    final nav = Navigator.of(context);
+    final msg = ScaffoldMessenger.of(context);
+    try {
+      await sb.rpc('set_group_info', params: {'p_name': name, 'p_desc': d.text.trim()});
+      nav.pop();
+      msg.showSnackBar(const SnackBar(content: Text('Info grup disimpan')));
+      return;
+    } on PostgrestException catch (e) {
+      if (mounted) setState(() => err = e.message);
+    } catch (_) {
+      if (mounted) setState(() => err = 'Gagal menyimpan, coba lagi');
+    }
+    if (mounted) setState(() => busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        backgroundColor: card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Nama & deskripsi grup'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: n,
+              maxLength: 40,
+              decoration: const InputDecoration(labelText: 'Nama grup', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: d,
+              maxLength: 120,
+              minLines: 2,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                  labelText: 'Deskripsi', alignLabelWithHint: true, border: OutlineInputBorder()),
+            ),
+            if (err.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(err, style: const TextStyle(color: Color(0xFFFF6B81), fontSize: 13)),
+              ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: busy ? null : () => Navigator.pop(context), child: const Text('Batal')),
+          FilledButton(onPressed: busy ? null : save, child: Text(busy ? 'Menyimpan...' : 'Simpan')),
+        ],
       );
 }
