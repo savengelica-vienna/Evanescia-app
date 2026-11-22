@@ -24,7 +24,7 @@ jobs:
           cache: true
 
       - name: Generate android project
-        run: flutter create --platforms=android --org com.nnev --project-name nnevapp .
+        run: flutter create --platforms=android --org com.evanescia --project-name apps .
 
       - name: Pasang keystore tetap (supaya update APK tidak bentrok)
         env:
@@ -41,9 +41,12 @@ jobs:
         run: |
           M=android/app/src/main/AndroidManifest.xml
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\n    <application|' $M
-          sed -i 's|android:label="[^"]*"|android:label="NnevApp"|' $M
+          sed -i 's|android:label="[^"]*"|android:label="Evanescia Apps"|' $M
 
       - run: flutter pub get
+
+      - name: Pasang ikon app
+        run: dart run flutter_launcher_icons
 
       - name: Matikan Android lint vital (workaround crash lint)
         run: |
