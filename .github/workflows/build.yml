@@ -68,16 +68,22 @@ jobs:
           echo "== $F =="
           grep -n -B1 -A6 "^android {" "$F"
 
-      - name: Build release APK
+      - name: Build release APK (arm64 + arm32, ukuran kecil)
         run: |
           VER=${GITHUB_REF_NAME#v}
-          flutter build apk --release --build-name=$VER --build-number=${{ github.run_number }}
-          cp build/app/outputs/flutter-apk/app-release.apk app-release.apk
+          COMMON="--release --obfuscate --split-debug-info=build/symbols --build-name=$VER --build-number=${{ github.run_number }}"
+          flutter build apk $COMMON --target-platform android-arm64
+          cp build/app/outputs/flutter-apk/app-release.apk app-arm64.apk
+          flutter build apk $COMMON --target-platform android-arm
+          cp build/app/outputs/flutter-apk/app-release.apk app-arm.apk
+          ls -lh app-*.apk
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          files: app-release.apk
+          files: |
+            app-arm64.apk
+            app-arm.apk
           generate_release_notes: true
 
       - name: Update version in Supabase
@@ -86,8 +92,10 @@ jobs:
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
         run: |
           VER=${GITHUB_REF_NAME#v}
-          URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/app-release.apk"
+          BASE="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}"
+          URL="$BASE/app-arm64.apk"
+          URL32="$BASE/app-arm.apk"
           curl -sS --fail -X PATCH "$SUPABASE_URL/rest/v1/app_config?id=eq.android" \
             -H "apikey: $SUPABASE_SECRET_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"version_code\": ${{ github.run_number }}, \"version_name\": \"$VER\", \"apk_url\": \"$URL\", \"changelog\": \"Versi $VER\"}"
+            -d "{\"version_code\": ${{ github.run_number }}, \"version_name\": \"$VER\", \"apk_url\": \"$URL\", \"apk_url_arm\": \"$URL32\", \"changelog\": \"Versi $VER\"}"
