@@ -840,6 +840,7 @@ class Home extends StatefulWidget {
 class _HomeState extends State<Home> {
   int tab = 0, cur = 0;
   int? shownFor;
+  bool cleaned = false;
   Map<String, dynamic>? cfg;
   StreamSubscription? sub;
   late final Stream<List<Map<String, dynamic>>> prof =
@@ -874,6 +875,11 @@ class _HomeState extends State<Home> {
       (cfg!['apk_url'] ?? '').toString().isNotEmpty;
 
   void maybePrompt({bool force = false}) {
+    // sudah terupdate -> sisa file .apk tidak berguna lagi, hapus otomatis (sekali)
+    if (!cleaned && cfg != null && cur > 0 && !hasUpdate) {
+      cleaned = true;
+      deleteUpdateApk();
+    }
     if (!hasUpdate || !mounted) return;
     final vc = cfg!['version_code'] as int;
     if (!force && shownFor == vc) return;
@@ -1083,28 +1089,103 @@ class RankPage extends StatelessWidget {
       ]);
 }
 
-class UpdatePage extends StatelessWidget {
+// ---------- FILE APK UPDATE (cache) ----------
+Future<int> updateApkSize() async {
+  var n = 0;
+  try {
+    final dir = await getTemporaryDirectory();
+    for (final e in dir.listSync()) {
+      if (e is File && e.path.endsWith('.apk')) n += await e.length();
+    }
+  } catch (_) {}
+  return n;
+}
+
+Future<int> deleteUpdateApk() async {
+  var n = 0;
+  try {
+    final dir = await getTemporaryDirectory();
+    for (final e in dir.listSync()) {
+      if (e is File && e.path.endsWith('.apk')) {
+        n += await e.length();
+        await e.delete();
+      }
+    }
+  } catch (_) {}
+  return n;
+}
+
+String fmtMb(int b) => '${(b / 1048576).toStringAsFixed(1)} MB';
+
+class UpdatePage extends StatefulWidget {
   final int cur;
   final Map<String, dynamic>? cfg;
   final VoidCallback onCheck;
   const UpdatePage({super.key, required this.cur, required this.cfg, required this.onCheck});
   @override
+  State<UpdatePage> createState() => _UpdatePageState();
+}
+
+class _UpdatePageState extends State<UpdatePage> {
+  late Future<int> size = updateApkSize();
+
+  void reload() => setState(() => size = updateApkSize());
+
+  @override
+  void didUpdateWidget(covariant UpdatePage old) {
+    super.didUpdateWidget(old);
+    if (old.cur != widget.cur || old.cfg != widget.cfg) reload();
+  }
+
+  Future<void> clean() async {
+    final n = await deleteUpdateApk();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(n > 0 ? 'File update dihapus (${fmtMb(n)} dibebaskan)' : 'Tidak ada file update')));
+    reload();
+  }
+
+  @override
   Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Home', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
         const SizedBox(height: 14),
         glassBox(Column(children: [
-          infoRow(Icons.sell_outlined, 'Build terpasang', Text('$cur', style: const TextStyle(fontWeight: FontWeight.w700))),
+          infoRow(Icons.sell_outlined, 'Build terpasang', Text('${widget.cur}', style: const TextStyle(fontWeight: FontWeight.w700))),
           infoRow(Icons.refresh, 'Versi terbaru',
-              Text(cfg == null ? '-' : '${cfg!['version_name']} (${cfg!['version_code']})',
+              Text(widget.cfg == null ? '-' : '${widget.cfg!['version_name']} (${widget.cfg!['version_code']})',
                   style: const TextStyle(fontWeight: FontWeight.w700))),
+          FutureBuilder<int>(
+            future: size,
+            builder: (_, s) => infoRow(Icons.folder_outlined, 'File update tersimpan',
+                Text((s.data ?? 0) > 0 ? fmtMb(s.data!) : 'Tidak ada',
+                    style: const TextStyle(fontWeight: FontWeight.w700))),
+          ),
         ])),
         SizedBox(
           width: double.infinity,
           height: 50,
           child: GlassButton(
-            onPressed: onCheck,
+            onPressed: () {
+              widget.onCheck();
+              reload();
+            },
             icon: const Icon(Icons.refresh),
             label: 'Cek update',
+          ),
+        ),
+        const SizedBox(height: 10),
+        FutureBuilder<int>(
+          future: size,
+          builder: (_, s) => SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: GlassButton(
+              tint: Colors.white,
+              strength: .16,
+              onPressed: (s.data ?? 0) > 0 ? clean : null,
+              icon: const Icon(Icons.delete_sweep_outlined),
+              label: 'Hapus file update',
+            ),
           ),
         ),
       ]);
