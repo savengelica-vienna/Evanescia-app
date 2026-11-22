@@ -1433,6 +1433,8 @@ class _ChatListPageState extends State<ChatListPage> {
   List<Map<String, dynamic>> users = [], msgs = [], hides = [];
   final subs = <StreamSubscription>[];
   final acked = <String>{};
+  final dismissed = <String>{}; // user yang di-X dari "Mulai mengobrol" (sementara)
+  bool hideSuggest = false;
   int seg = 0;
 
   @override
@@ -1592,8 +1594,10 @@ class _ChatListPageState extends State<ChatListPage> {
         onTap: () => open(null),
       ),
     ];
+    final chatted = entries.where((e) => e.value != null).toList();
+    final fresh = entries.where((e) => e.value == null && !dismissed.contains(e.key['id'])).toList();
     final userItems = <Widget>[
-      for (final e in entries)
+      for (final e in chatted)
         convRow(
           leading: avatar((e.key['rank'] ?? 'user') as String, s: 52, url: e.key['avatar_url'] as String?),
           title: Row(children: [
@@ -1621,22 +1625,107 @@ class _ChatListPageState extends State<ChatListPage> {
         const SizedBox(height: 14),
         segBar(),
         const SizedBox(height: 12),
-        Glass(
-          radius: 22,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-          child: Column(children: [
-            for (var i = 0; i < items.length; i++) ...[
-              if (i > 0) const Divider(height: 1, color: line, indent: 66),
-              items[i],
-            ],
-          ]),
-        ),
-        if (seg == 1 && entries.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(24),
-            child: Center(child: Text('Belum ada user lain', style: TextStyle(color: Colors.white70))),
+        if (items.isNotEmpty)
+          Glass(
+            radius: 22,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            child: Column(children: [
+              for (var i = 0; i < items.length; i++) ...[
+                if (i > 0) const Divider(height: 1, color: line, indent: 66),
+                items[i],
+              ],
+            ]),
           ),
+        if (seg == 1 && chatted.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(20),
+            child: Center(child: Text('Belum ada percakapan', style: TextStyle(color: Colors.white70))),
+          ),
+        if (seg == 1) ...[
+          const SizedBox(height: 18),
+          Row(children: [
+            Expanded(
+              child: Text(hideSuggest ? 'Mulai mengobrol' : 'Mulai mengobrol (${fresh.length})',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            ),
+            GestureDetector(
+              onTap: () => setState(() {
+                hideSuggest = !hideSuggest;
+                if (!hideSuggest) dismissed.clear();
+              }),
+              child: Glass(
+                radius: 22,
+                strength: .30,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                child: Text(hideSuggest ? 'Tampilkan' : 'Sembunyikan',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ]),
+          if (!hideSuggest) ...[
+            const SizedBox(height: 10),
+            if (fresh.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(18),
+                child: Center(
+                  child: Text(entries.isEmpty ? 'Belum ada user lain' : 'Semua user sudah ada di percakapan',
+                      style: const TextStyle(color: Colors.white70)),
+                ),
+              )
+            else
+              Glass(
+                radius: 22,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                child: Column(children: [
+                  for (var i = 0; i < fresh.length; i++) ...[
+                    if (i > 0) const Divider(height: 1, color: line, indent: 66),
+                    suggestRow(fresh[i].key),
+                  ],
+                ]),
+              ),
+          ],
+        ],
       ],
+    );
+  }
+
+  // Baris "Mulai mengobrol": semua user terdaftar yang belum pernah kamu chat
+  Widget suggestRow(Map<String, dynamic> u) {
+    final rk = (u['rank'] ?? 'user') as String;
+    return InkWell(
+      onTap: () => open(u),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(children: [
+          avatar(rk, s: 52, url: u['avatar_url'] as String?),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Row(children: [
+              Flexible(child: RankText(u['username'] as String, rk, size: 16)),
+              const SizedBox(width: 6),
+              RankText('(${(ranks[rk] ?? ranks['user']!).name})', rk, size: 12),
+            ]),
+          ),
+          GestureDetector(
+            onTap: () => open(u),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(color: const Color(0xFFD9FDD3), borderRadius: BorderRadius.circular(99)),
+              child: const Text('Mengobrol',
+                  style: TextStyle(color: Color(0xFF0F5C2E), fontWeight: FontWeight.w700, fontSize: 13)),
+            ),
+          ),
+          const SizedBox(width: 4),
+          InkWell(
+            borderRadius: BorderRadius.circular(99),
+            onTap: () => setState(() => dismissed.add(u['id'] as String)),
+            child: const Padding(
+              padding: EdgeInsets.all(8),
+              child: Icon(Icons.close, size: 20, color: Colors.white54),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }
@@ -2479,7 +2568,67 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
   int? days;
   bool busy = false;
   List<Map<String, dynamic>> users = [];
+  Map<String, String> pws = {}; // id user -> password (hanya yang boleh dilihat)
+  final shown = <String>{};
   StreamSubscription? sub;
+
+  // Developer: semua. Helper: hanya rank di bawah Helper (jadi tidak pernah password Developer).
+  bool canSeePw(Map<String, dynamic> u) => myLv >= 5 || lv(u['rank'] as String?) < myLv;
+
+  Future<void> loadPw() async {
+    try {
+      final r = await sb.rpc('get_user_passwords');
+      final m = <String, String>{};
+      for (final e in (r as List)) {
+        m[e['uid'] as String] = e['pw'] as String;
+      }
+      if (mounted) setState(() => pws = m);
+    } catch (_) {}
+  }
+
+  Widget pwLine(Map<String, dynamic> u) {
+    final id = u['id'] as String;
+    final p = pws[id];
+    final show = shown.contains(id);
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(children: [
+        const Icon(Icons.key_outlined, size: 13, color: mu),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(
+            p == null ? 'Password belum tersimpan' : (show ? p : '••••••••'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                color: p == null ? mu : Colors.white70,
+                fontSize: 12.5,
+                fontFamily: p == null ? null : 'monospace'),
+          ),
+        ),
+        if (p != null) ...[
+          const SizedBox(width: 8),
+          InkWell(
+            onTap: () => setState(() => show ? shown.remove(id) : shown.add(id)),
+            child: Padding(
+              padding: const EdgeInsets.all(3),
+              child: Icon(show ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 16, color: mu),
+            ),
+          ),
+          InkWell(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: p));
+              snack(context, 'Password disalin');
+            },
+            child: const Padding(
+              padding: EdgeInsets.all(3),
+              child: Icon(Icons.copy_rounded, size: 15, color: mu),
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
 
   int get myLv => lv(widget.myRank);
   String get myId => sb.auth.currentUser!.id;
@@ -2492,6 +2641,7 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
     super.initState();
     sub = sb.from('profiles').stream(primaryKey: ['id']).order('created_at').listen((r) {
       if (mounted) setState(() => users = r);
+      loadPw();
     });
   }
 
@@ -2508,14 +2658,20 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
     }
     setState(() => busy = true);
     try {
+      final uname = un.text.trim(), upass = pw.text;
       await sb.rpc('create_user', params: {
-        'p_username': un.text.trim(),
-        'p_password': pw.text,
+        'p_username': uname,
+        'p_password': upass,
         'p_rank': rank,
         'p_days': days,
       });
+      try {
+        // simpan supaya bisa dilihat di Kelola User (diverifikasi server terhadap hash akun)
+        await sb.rpc('store_user_password', params: {'p_username': uname, 'p_password': upass});
+      } catch (_) {}
       un.clear();
       pw.clear();
+      loadPw();
       if (mounted) snack(context, 'Akun berhasil dibuat');
     } on PostgrestException catch (e) {
       if (mounted) snack(context, e.message);
@@ -2641,6 +2797,7 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
                           'p_username': (myLv >= 5 && newName.isNotEmpty && newName != u['username']) ? newName : null,
                           'p_password': (myLv >= 5 && pc.text.isNotEmpty) ? pc.text : null,
                         });
+                        loadPw();
                         if (ctx.mounted) Navigator.pop(ctx);
                       } on PostgrestException catch (e) {
                         if (ctx.mounted) snack(ctx, e.message);
@@ -2716,6 +2873,7 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
                           '${(ranks[rk] ?? ranks['user']!).name} · ${exp == null ? 'Lifetime' : 's/d ${(exp as String).substring(0, 10)}'}',
                           style: const TextStyle(color: mu, fontSize: 12),
                         ),
+                        if (canSeePw(u)) pwLine(u),
                       ]),
                     ),
                     if (can) ...[
