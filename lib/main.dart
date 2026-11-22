@@ -69,43 +69,58 @@ class OceanBg extends StatefulWidget {
   State<OceanBg> createState() => _OceanBgState();
 }
 
+// Gradient digerakkan ~24 fps (bukan 60). Geraknya sangat lambat sehingga mata tidak bisa
+// membedakan, tapi blur kaca di atasnya jadi dihitung ulang jauh lebih jarang (hemat GPU).
 class _OceanBgState extends State<OceanBg> with SingleTickerProviderStateMixin {
-  late final AnimationController c =
-      AnimationController(vsync: this, duration: const Duration(seconds: 12))..repeat();
   static const pts = [Offset(0, .5), Offset(.5, 1), Offset(1, .5), Offset(.5, 0), Offset(0, .5)];
-  late final Animation<Offset> pos = TweenSequence<Offset>([
+  static const _colors = [
+    Color(0xFF003B73),
+    Color(0xFF0077B6),
+    Color(0xFF00B4D8),
+    Color(0xFF48CAE4),
+    Color(0xFF90E0EF),
+    Color(0xFFCAF0F8),
+    Color(0xFF003B73),
+  ];
+  final seq = TweenSequence<Offset>([
     for (var i = 0; i < 4; i++)
       TweenSequenceItem<Offset>(
         tween: Tween<Offset>(begin: pts[i], end: pts[i + 1]).chain(CurveTween(curve: Curves.easeInOut)),
         weight: 1,
       ),
-  ]).animate(c);
+  ]);
+  final pos = ValueNotifier<Offset>(const Offset(0, .5));
+  Duration last = Duration.zero;
+  late final tk = createTicker((d) {
+    if ((d - last).inMilliseconds < 41) return;
+    last = d;
+    pos.value = seq.transform((d.inMilliseconds % 12000) / 12000);
+  });
+
+  @override
+  void initState() {
+    super.initState();
+    tk.start();
+  }
 
   @override
   void dispose() {
-    c.dispose();
+    tk.dispose();
+    pos.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => RepaintBoundary(
-        child: AnimatedBuilder(
-          animation: pos,
-          builder: (_, __) => DecoratedBox(
+        child: ValueListenableBuilder<Offset>(
+          valueListenable: pos,
+          builder: (_, p, __) => DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: const Alignment(-1, -1),
                 end: const Alignment(7, 7),
-                colors: const [
-                  Color(0xFF003B73),
-                  Color(0xFF0077B6),
-                  Color(0xFF00B4D8),
-                  Color(0xFF48CAE4),
-                  Color(0xFF90E0EF),
-                  Color(0xFFCAF0F8),
-                  Color(0xFF003B73),
-                ],
-                transform: _Pan(-pos.value.dx * 3, -pos.value.dy * 3),
+                colors: _colors,
+                transform: _Pan(-p.dx * 3, -p.dy * 3),
               ),
             ),
           ),
@@ -277,12 +292,16 @@ class Glass extends StatelessWidget {
   Widget build(BuildContext context) {
     final r = BorderRadius.circular(radius);
     return CustomPaint(
+      isComplex: true,
+      willChange: false,
       painter: _ShadowPainter(radius),
       child: ClipRRect(
         borderRadius: r,
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
           child: CustomPaint(
+            isComplex: true,
+            willChange: false,
             foregroundPainter: _SkinPainter(
               radius: radius,
               full: full,
@@ -487,12 +506,16 @@ class _GlassNavState extends State<GlassNav> with SingleTickerProviderStateMixin
           width: _w,
           height: _h,
           child: CustomPaint(
+            isComplex: true,
+            willChange: false,
             painter: const _ShadowPainter(_h / 2),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(_h / 2),
               child: BackdropFilter(
                 filter: _filter(mq.devicePixelRatio),
                 child: CustomPaint(
+                  isComplex: true,
+                  willChange: false,
                   foregroundPainter: const _SkinPainter(radius: _h / 2, light: 1.1, dark: 1.8, rimWidth: 0),
                   child: Container(
                     color: const Color(0xFFBBBBBC).withOpacity(.12),
@@ -513,6 +536,8 @@ class _GlassNavState extends State<GlassNav> with SingleTickerProviderStateMixin
                               scaleX: sx,
                               alignment: right ? Alignment.centerLeft : Alignment.centerRight,
                               child: CustomPaint(
+                                isComplex: true,
+                                willChange: false,
                                 foregroundPainter: const _SkinPainter(
                                     radius: (_h - _pad * 2) / 2, indicator: true, light: 1.1, dark: 1.3, rimWidth: 0),
                                 child: DecoratedBox(
@@ -630,65 +655,66 @@ class _Slide extends GradientTransform {
       Matrix4.translationValues(bounds.width * p, 0, 0);
 }
 
-class RankText extends StatefulWidget {
+// Satu "jam" bersama untuk semua nama rank yang bergerak (bukan 1 controller per teks).
+// Hanya berjalan selama ada nama bergerak yang tampil, ~24 fps.
+class _RankClock extends ValueNotifier<double> {
+  _RankClock() : super(0);
+  Timer? _t;
+  int _n = 0;
+  final _sw = Stopwatch();
+  @override
+  void addListener(VoidCallback l) {
+    super.addListener(l);
+    if (_n++ == 0) {
+      _sw.start();
+      _t = Timer.periodic(const Duration(milliseconds: 42), (_) => value = (_sw.elapsedMilliseconds % 3000) / 3000);
+    }
+  }
+
+  @override
+  void removeListener(VoidCallback l) {
+    super.removeListener(l);
+    if (--_n == 0) {
+      _t?.cancel();
+      _t = null;
+      _sw.stop();
+    }
+  }
+}
+
+final _rankClock = _RankClock();
+
+class RankText extends StatelessWidget {
   final String text, rank;
   final double size;
   const RankText(this.text, this.rank, {super.key, this.size = 17});
-  @override
-  State<RankText> createState() => _RankTextState();
-}
-
-class _RankTextState extends State<RankText> with SingleTickerProviderStateMixin {
-  late final AnimationController c =
-      AnimationController(vsync: this, duration: const Duration(seconds: 3));
-
-  void _sync() {
-    final a = ranks[widget.rank]?.anim ?? false;
-    if (a && !c.isAnimating) c.repeat();
-    if (!a) c.stop();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _sync();
-  }
-
-  @override
-  void didUpdateWidget(RankText o) {
-    super.didUpdateWidget(o);
-    _sync();
-  }
-
-  @override
-  void dispose() {
-    c.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
-    final r = ranks[widget.rank] ?? ranks['user']!;
+    final r = ranks[rank] ?? ranks['user']!;
     if (r.grad == null) {
-      return Text(widget.text,
-          style: TextStyle(fontSize: widget.size, fontWeight: FontWeight.w800, color: r.solid));
+      return Text(text, style: TextStyle(fontSize: size, fontWeight: FontWeight.w800, color: r.solid));
     }
     final style = TextStyle(
-      fontSize: widget.size,
+      fontSize: size,
       fontWeight: FontWeight.w800,
       color: Colors.white,
       shadows: [Shadow(color: r.glow!.withOpacity(.35), blurRadius: 4)],
     );
-    return AnimatedBuilder(
-      animation: c,
-      builder: (_, __) => ShaderMask(
-        blendMode: BlendMode.srcIn,
-        shaderCallback: (b) => LinearGradient(
-          colors: r.grad!,
-          tileMode: TileMode.repeated,
-          transform: _Slide(c.value),
-        ).createShader(b),
-        child: Text(widget.text, style: style),
+    Widget masked(double v) => ShaderMask(
+          blendMode: BlendMode.srcIn,
+          shaderCallback: (b) => LinearGradient(
+            colors: r.grad!,
+            tileMode: TileMode.repeated,
+            transform: _Slide(v),
+          ).createShader(b),
+          child: Text(text, style: style),
+        );
+    if (!r.anim || !TickerMode.of(context)) return masked(0);
+    return RepaintBoundary(
+      child: ValueListenableBuilder<double>(
+        valueListenable: _rankClock,
+        builder: (_, v, __) => masked(v),
       ),
     );
   }
@@ -938,9 +964,13 @@ class _HomeState extends State<Home> {
               body: SafeArea(
                 bottom: false,
                 child: IndexedStack(index: tab, children: [
-                  ListView(padding: pad, physics: const BouncingScrollPhysics(), children: [updateTab]),
-                  ChatListPage(me: me),
-                  ListView(padding: pad, physics: const BouncingScrollPhysics(), children: [ProfilePage(me: me)]),
+                  TickerMode(
+                      enabled: tab == 0,
+                      child: ListView(padding: pad, physics: const BouncingScrollPhysics(), children: [updateTab])),
+                  TickerMode(enabled: tab == 1, child: ChatListPage(me: me)),
+                  TickerMode(
+                      enabled: tab == 2,
+                      child: ListView(padding: pad, physics: const BouncingScrollPhysics(), children: [ProfilePage(me: me)])),
                 ]),
               ),
               bottomNavigationBar: GlassNav(index: tab, onTap: (i) => setState(() => tab = i)),
@@ -979,6 +1009,7 @@ class ProfilePage extends StatelessWidget {
                   child: (me['avatar_url'] is String && (me['avatar_url'] as String).isNotEmpty)
                       ? Image.network(me['avatar_url'] as String,
                           fit: BoxFit.cover,
+                          cacheWidth: 360,
                           errorBuilder: (_, __, ___) => Icon(r.icon, size: 38, color: r.solid))
                       : Icon(r.icon, size: 38, color: r.solid),
                 ),
@@ -1213,7 +1244,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
   Future<void> start() async {
     try {
-      final req = http.Request('GET', Uri.parse(widget.cfg['apk_url'] as String));
+      final req = http.Request('GET', Uri.parse(apkFor(widget.cfg)));
       final res = await http.Client().send(req);
       if (res.statusCode != 200) throw Exception('http ${res.statusCode}');
       final dir = await getTemporaryDirectory();
@@ -1224,7 +1255,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
       await for (final chunk in res.stream) {
         sink.add(chunk);
         got += chunk.length;
-        if (total > 0 && mounted) {
+        if (total > 0 && mounted && (got / total - pct >= .01 || got == total)) {
           setState(() {
             pct = got / total;
             msg = 'Mengunduh ${(pct * 100).toInt()}%';
@@ -1332,12 +1363,20 @@ Widget avatar(String rank, {double s = 34, String? url}) {
     child: (url == null || url.isEmpty)
         ? fallback
         : Image.network(url,
-            fit: BoxFit.cover, width: s, height: s, errorBuilder: (_, __, ___) => Center(child: fallback)),
+            fit: BoxFit.cover, width: s, height: s, cacheWidth: (s * 4).round(), errorBuilder: (_, __, ___) => Center(child: fallback)),
   );
 }
 
 // ---------- CHAT ----------
 String dmRoom(String a, String b) => a.compareTo(b) < 0 ? 'dm_${a}_$b' : 'dm_${b}_$a';
+
+// APK 64-bit (arm64) atau 32-bit (armv7) sesuai arsitektur app yang sedang berjalan.
+String apkFor(Map<String, dynamic> cfg) {
+  final v = Platform.version;
+  final u32 = (cfg['apk_url_arm'] ?? '').toString();
+  if (v.contains('android_arm') && !v.contains('android_arm64') && u32.isNotEmpty) return u32;
+  return cfg['apk_url'] as String;
+}
 
 String newId() {
   final r = Random.secure();
@@ -2411,8 +2450,8 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
   int get myLv => lv(widget.myRank);
   String get myId => sb.auth.currentUser!.id;
   List<String> get assignable => ranks.keys.where((k) => myLv >= 5 || lv(k) < myLv).toList();
-  bool canManage(Map<String, dynamic> u) =>
-      u['id'] != myId && (myLv >= 5 || lv(u['rank'] as String?) < myLv);
+  bool canManage(Map<String, dynamic> u) => myLv >= 5 || (u['id'] != myId && lv(u['rank'] as String?) < myLv);
+  bool canDelete(Map<String, dynamic> u) => u['id'] != myId && canManage(u);
 
   @override
   void initState() {
@@ -2453,7 +2492,7 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
   }
 
   Future<void> del(Map<String, dynamic> u) async {
-    if (!canManage(u)) {
+    if (!canDelete(u)) {
       snack(context, 'Rank kamu tidak cukup untuk menghapus user ini');
       return;
     }
@@ -2506,6 +2545,7 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
     var r = u['rank'] as String;
     int? d = -1;
     final pc = TextEditingController();
+    final nc = TextEditingController(text: u['username'] as String);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2516,6 +2556,14 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
           child: SingleChildScrollView(
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(u['username'] as String, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              if (myLv >= 5) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: nc,
+                  autocorrect: false,
+                  decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder()),
+                ),
+              ],
               const SizedBox(height: 14),
               const Text('Rank', style: TextStyle(color: mu)),
               const SizedBox(height: 6),
@@ -2525,37 +2573,40 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
               const SizedBox(height: 6),
               DurationPicker(allowKeep: true, onChanged: (v) => d = v),
               const SizedBox(height: 14),
-              TextField(
-                controller: pc,
-                decoration: const InputDecoration(
-                    labelText: 'Password baru (kosongkan jika tidak diubah)', border: OutlineInputBorder()),
-              ),
+              if (myLv >= 5)
+                TextField(
+                  controller: pc,
+                  decoration: const InputDecoration(
+                      labelText: 'Password baru (kosongkan jika tidak diubah)', border: OutlineInputBorder()),
+                ),
               const SizedBox(height: 16),
               Row(children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      del(u);
-                    },
-                    icon: const Icon(Icons.delete_outline, color: Color(0xFFFF6B81)),
-                    label: const Text('Hapus', style: TextStyle(color: Color(0xFFFF6B81))),
+                if (canDelete(u)) ...[
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        del(u);
+                      },
+                      icon: const Icon(Icons.delete_outline, color: Color(0xFFFF6B81)),
+                      label: const Text('Hapus', style: TextStyle(color: Color(0xFFFF6B81))),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 10),
+                  const SizedBox(width: 10),
+                ],
                 Expanded(
                   child: FilledButton(
                     onPressed: () async {
                       try {
-                        await sb.rpc('update_user', params: {
+                        final newName = nc.text.trim();
+                        await sb.rpc('edit_user', params: {
                           'p_id': u['id'],
                           'p_rank': r,
                           'p_set_expiry': d != -1,
                           'p_days': d == -1 ? null : d,
+                          'p_username': (myLv >= 5 && newName.isNotEmpty && newName != u['username']) ? newName : null,
+                          'p_password': (myLv >= 5 && pc.text.isNotEmpty) ? pc.text : null,
                         });
-                        if (pc.text.isNotEmpty) {
-                          await sb.rpc('set_user_password', params: {'p_id': u['id'], 'p_password': pc.text});
-                        }
                         if (ctx.mounted) Navigator.pop(ctx);
                       } on PostgrestException catch (e) {
                         if (ctx.mounted) snack(ctx, e.message);
@@ -2635,11 +2686,13 @@ class _ManageUsersPageState extends State<ManageUsersPage> {
                     ),
                     if (can) ...[
                       const Icon(Icons.edit_outlined, size: 18, color: mu),
-                      const SizedBox(width: 16),
-                      GestureDetector(
-                        onTap: () => del(u),
-                        child: const Icon(Icons.delete_outline, size: 20, color: Color(0xFFFF6B81)),
-                      ),
+                      if (canDelete(u)) ...[
+                        const SizedBox(width: 16),
+                        GestureDetector(
+                          onTap: () => del(u),
+                          child: const Icon(Icons.delete_outline, size: 20, color: Color(0xFFFF6B81)),
+                        ),
+                      ],
                     ] else
                       const Icon(Icons.lock_outline, size: 18, color: mu),
                   ]),
@@ -2667,7 +2720,7 @@ Widget camBadge() => Container(
     );
 
 Future<Uint8List?> pickAndCrop(BuildContext c) async {
-  final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 2048, imageQuality: 92);
+  final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1280, imageQuality: 90);
   if (x == null) return null;
   final bytes = await x.readAsBytes();
   if (!c.mounted) return null;
@@ -2747,6 +2800,7 @@ class _GroupAvatarState extends State<GroupAvatar> {
           ? icon
           : Image.network(url!,
               fit: BoxFit.cover,
+              cacheWidth: (widget.s * 4).round(),
               width: widget.s,
               height: widget.s,
               errorBuilder: (_, __, ___) => Center(child: icon)),
