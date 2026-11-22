@@ -1397,7 +1397,13 @@ Widget avatar(String rank, {double s = 34, String? url}) {
     child: (url == null || url.isEmpty)
         ? fallback
         : Image.network(url,
-            fit: BoxFit.cover, width: s, height: s, cacheWidth: (s * 4).round(), errorBuilder: (_, __, ___) => Center(child: fallback)),
+            fit: BoxFit.cover,
+            width: s,
+            height: s,
+            cacheWidth: (s * 4).round(),
+            // selama foto masih diunduh tampilkan ikon rank (bukan lingkaran kosong)
+            loadingBuilder: (_, child, prog) => prog == null ? child : Center(child: fallback),
+            errorBuilder: (_, __, ___) => Center(child: fallback)),
   );
 }
 
@@ -3053,7 +3059,7 @@ class _CropPageState extends State<CropPage> {
     setState(() => busy = true);
     try {
       final b = boundaryKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-      final img = await b.toImage(pixelRatio: 640 / b.size.width);
+      final img = await b.toImage(pixelRatio: 384 / b.size.width);
       final bd = await img.toByteData(format: ui.ImageByteFormat.png);
       if (mounted) Navigator.pop(context, bd!.buffer.asUint8List());
     } catch (_) {
@@ -3916,7 +3922,7 @@ class _ContactDialogState extends State<ContactDialog> {
                   : 'Nomor WhatsApp wajib, sosmed lain boleh dikosongkan.',
               style: const TextStyle(color: mu, fontSize: 13),
             ),
-            field(wa, 'WhatsApp (wajib)', '628123456789', Icons.chat,
+            field(wa, 'WhatsApp (wajib)', '', Icons.chat,
                 kb: TextInputType.phone, on: (_) => setState(() {})),
             if (w != null)
               Padding(
