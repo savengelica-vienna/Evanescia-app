@@ -15,6 +15,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 const supaUrl = 'https://ypkvgvenejqfkacljtpa.supabase.co';
 const supaKey = 'sb_publishable_P5FZe_rmoWEDO3rvjZAsYg_EPVYAiKR';
@@ -436,10 +437,21 @@ class GlassNav extends StatefulWidget {
 }
 
 class _GlassNavState extends State<GlassNav> with SingleTickerProviderStateMixin {
-  static const _icons = [Icons.home_outlined, Icons.chat_bubble_outline, Icons.person_outline];
-  static const _fill = [Icons.home_rounded, Icons.chat_bubble_rounded, Icons.person_rounded];
-  static const _labels = ['Home', 'Chat', 'Profile'];
-  static const _w = 244.0, _h = 70.0, _pad = 4.0;
+  static const _icons = [
+    Icons.home_outlined,
+    Icons.chat_bubble_outline,
+    Icons.integration_instructions_outlined,
+    Icons.person_outline,
+  ];
+  static const _fill = [
+    Icons.home_rounded,
+    Icons.chat_bubble_rounded,
+    Icons.integration_instructions_rounded,
+    Icons.person_rounded,
+  ];
+  static const _labels = ['Home', 'Chat', 'Snippet', 'Profile'];
+  static const _n = 4;
+  static const _w = 320.0, _h = 70.0, _pad = 4.0;
   static const _ease = Cubic(1, 0, .4, 1);
 
   late final AnimationController c = AnimationController(vsync: this, duration: const Duration(milliseconds: 440));
@@ -497,7 +509,7 @@ class _GlassNavState extends State<GlassNav> with SingleTickerProviderStateMixin
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final slot = (_w - _pad * 2) / 3;
+    final slot = (_w - _pad * 2) / _n;
     return Padding(
       padding: EdgeInsets.only(bottom: 12 + mq.viewPadding.bottom),
       child: Align(
@@ -554,7 +566,7 @@ class _GlassNavState extends State<GlassNav> with SingleTickerProviderStateMixin
                       Padding(
                         padding: const EdgeInsets.all(_pad),
                         child: Row(children: [
-                          for (var i = 0; i < 3; i++)
+                          for (var i = 0; i < _n; i++)
                             Expanded(
                               child: Semantics(
                                 label: _labels[i],
@@ -866,7 +878,7 @@ class Home extends StatefulWidget {
 class _HomeState extends State<Home> {
   int tab = 0, cur = 0;
   int? shownFor;
-  bool cleaned = false;
+  bool cleaned = false, askedWa = false;
   Map<String, dynamic>? cfg;
   StreamSubscription? sub;
   late final Stream<List<Map<String, dynamic>>> prof =
@@ -942,6 +954,13 @@ class _HomeState extends State<Home> {
             WidgetsBinding.instance.addPostFrameCallback((_) => sb.auth.signOut());
             return const Scaffold(body: Center(child: Text('Masa aktif akun kamu sudah habis')));
           }
+          // WhatsApp wajib: kalau belum diisi, minta isi sekali per sesi buka app
+          if (!askedWa && _s(me['whatsapp']).isEmpty) {
+            askedWa = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) showContactEditor(context, me, force: true);
+            });
+          }
           final updateTab = UpdatePage(
             cur: cur,
             cfg: cfg,
@@ -968,8 +987,9 @@ class _HomeState extends State<Home> {
                       enabled: tab == 0,
                       child: ListView(padding: pad, physics: const BouncingScrollPhysics(), children: [updateTab])),
                   TickerMode(enabled: tab == 1, child: ChatListPage(me: me)),
+                  TickerMode(enabled: tab == 2, child: SnippetPage(me: me)),
                   TickerMode(
-                      enabled: tab == 2,
+                      enabled: tab == 3,
                       child: ListView(padding: pad, physics: const BouncingScrollPhysics(), children: [ProfilePage(me: me)])),
                 ]),
               ),
@@ -1049,6 +1069,20 @@ class ProfilePage extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w700))),
         infoRow(Icons.calendar_today_outlined, 'Bergabung',
             Text((me['created_at'] as String).substring(0, 10), style: const TextStyle(fontWeight: FontWeight.w700))),
+      ])),
+      glassBox(Column(children: [
+        Row(children: [
+          const Expanded(child: Text('Kontak', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+          TextButton.icon(
+            onPressed: () => showContactEditor(context, me),
+            icon: const Icon(Icons.edit_outlined, size: 16),
+            label: const Text('Ubah'),
+          ),
+        ]),
+        infoRow(Icons.chat, 'WhatsApp', contactVal(me['whatsapp'], req: true)),
+        infoRow(Icons.send_rounded, 'Telegram', contactVal(me['telegram'], prefix: '@')),
+        infoRow(Icons.music_note, 'TikTok', contactVal(me['tiktok'], prefix: '@')),
+        infoRow(Icons.camera_alt_outlined, 'Instagram', contactVal(me['instagram'], prefix: '@')),
       ])),
       if (rank == 'developer' || rank == 'helper') ...[
         SizedBox(
@@ -2978,7 +3012,7 @@ class UserProfilePage extends StatelessWidget {
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
-            child: Column(children: [
+            child: SingleChildScrollView(child: Column(children: [
               const SizedBox(height: 16),
               avatar(rank, s: 132, url: user['avatar_url'] as String?),
               const SizedBox(height: 18),
@@ -3016,7 +3050,21 @@ class UserProfilePage extends StatelessWidget {
                     },
                   ),
                 ),
-            ]),
+              if (!isMe)
+                for (final ct in contactsOf(user)) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: GlassButton(
+                      icon: Icon(ct.icon),
+                      label: ct.label,
+                      tint: ct.tint,
+                      onPressed: () => openLink(context, ct.url),
+                    ),
+                  ),
+                ],
+            ])),
           ),
         ),
       ),
@@ -3539,4 +3587,932 @@ class _MsgMenuViewState extends State<_MsgMenuView> {
       ]),
     );
   }
+}
+
+
+// =====================================================================
+// KONTAK: WhatsApp (wajib) + Telegram / TikTok / Instagram (opsional)
+// =====================================================================
+String _s(dynamic v) => (v ?? '').toString().trim();
+
+// Ambil digit saja. 0812... -> 62812..., +62 812-... -> 62812...
+// Hasil null = nomor tidak valid.
+String? cleanWa(String raw) {
+  var d = raw.replaceAll(RegExp(r'[^0-9]'), '');
+  if (d.startsWith('00')) d = d.substring(2);
+  if (d.startsWith('0')) d = '62${d.substring(1)}';
+  if (d.length < 8 || d.length > 15) return null;
+  return d;
+}
+
+// Terima "@user", "user", atau link profil. '' = kosong (boleh), null = tidak valid.
+String? cleanHandle(String raw) {
+  var s = raw.trim();
+  if (s.isEmpty) return '';
+  s = s.split('?').first;
+  if (s.contains('/')) {
+    final parts = s.split('/').where((e) => e.isNotEmpty).toList();
+    s = parts.isEmpty ? '' : parts.last;
+  }
+  if (s.startsWith('@')) s = s.substring(1);
+  return RegExp(r'^[A-Za-z0-9._]{2,32}$').hasMatch(s) ? s : null;
+}
+
+class _Ct {
+  final IconData icon;
+  final String label, url;
+  final Color tint;
+  const _Ct(this.icon, this.label, this.tint, this.url);
+}
+
+List<_Ct> contactsOf(Map<String, dynamic> u) {
+  final out = <_Ct>[];
+  final wa = _s(u['whatsapp']);
+  final tg = _s(u['telegram']);
+  final tt = _s(u['tiktok']);
+  final ig = _s(u['instagram']);
+  if (wa.isNotEmpty) out.add(_Ct(Icons.chat, 'Chat di WhatsApp', const Color(0xFF25D366), 'https://wa.me/$wa'));
+  if (tg.isNotEmpty) out.add(_Ct(Icons.send_rounded, 'Telegram', const Color(0xFF2AABEE), 'https://t.me/$tg'));
+  if (tt.isNotEmpty) {
+    out.add(_Ct(Icons.music_note, 'TikTok', const Color(0xFF25F4EE), 'https://www.tiktok.com/@$tt'));
+  }
+  if (ig.isNotEmpty) {
+    out.add(_Ct(Icons.camera_alt_outlined, 'Instagram', const Color(0xFFE1306C), 'https://instagram.com/$ig'));
+  }
+  return out;
+}
+
+Future<void> openLink(BuildContext c, String url) async {
+  try {
+    final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    if (!ok && c.mounted) snack(c, 'Tidak bisa membuka link');
+  } catch (_) {
+    if (c.mounted) snack(c, 'Tidak bisa membuka link');
+  }
+}
+
+Widget contactVal(dynamic v, {String prefix = '', bool req = false}) {
+  final t = _s(v);
+  if (t.isEmpty) {
+    return Text(req ? 'Wajib diisi' : 'Belum diisi',
+        style: TextStyle(color: req ? const Color(0xFFFF6B81) : mu, fontWeight: FontWeight.w600));
+  }
+  return Text('$prefix$t', style: const TextStyle(fontWeight: FontWeight.w700));
+}
+
+Future<void> showContactEditor(BuildContext c, Map<String, dynamic> me, {bool force = false}) =>
+    showDialog<void>(
+      context: c,
+      barrierDismissible: !force,
+      builder: (_) => ContactDialog(me: me, force: force),
+    );
+
+class ContactDialog extends StatefulWidget {
+  final Map<String, dynamic> me;
+  final bool force;
+  const ContactDialog({super.key, required this.me, required this.force});
+  @override
+  State<ContactDialog> createState() => _ContactDialogState();
+}
+
+class _ContactDialogState extends State<ContactDialog> {
+  late final wa = TextEditingController(text: _s(widget.me['whatsapp']));
+  late final tg = TextEditingController(text: _s(widget.me['telegram']));
+  late final tt = TextEditingController(text: _s(widget.me['tiktok']));
+  late final ig = TextEditingController(text: _s(widget.me['instagram']));
+  String err = '';
+  bool busy = false;
+
+  @override
+  void dispose() {
+    wa.dispose();
+    tg.dispose();
+    tt.dispose();
+    ig.dispose();
+    super.dispose();
+  }
+
+  Future<void> save() async {
+    final w = cleanWa(wa.text);
+    if (w == null) {
+      setState(() => err = 'Nomor WhatsApp tidak valid. Contoh: 628123456789');
+      return;
+    }
+    final t = cleanHandle(tg.text), k = cleanHandle(tt.text), i = cleanHandle(ig.text);
+    if (t == null || k == null || i == null) {
+      setState(() => err = 'Username sosmed hanya boleh huruf, angka, titik, dan garis bawah (2-32 karakter)');
+      return;
+    }
+    setState(() {
+      busy = true;
+      err = '';
+    });
+    final nav = Navigator.of(context);
+    final msg = ScaffoldMessenger.of(context);
+    try {
+      await sb.rpc('set_my_contacts',
+          params: {'p_whatsapp': w, 'p_telegram': t, 'p_tiktok': k, 'p_instagram': i});
+      nav.pop();
+      msg.showSnackBar(const SnackBar(content: Text('Kontak disimpan')));
+      return;
+    } on PostgrestException catch (e) {
+      if (mounted) setState(() => err = e.message);
+    } catch (_) {
+      if (mounted) setState(() => err = 'Gagal menyimpan, coba lagi');
+    }
+    if (mounted) setState(() => busy = false);
+  }
+
+  Widget field(TextEditingController c, String label, String hint, IconData i,
+          {TextInputType? kb, ValueChanged<String>? on}) =>
+      Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: TextField(
+          controller: c,
+          keyboardType: kb,
+          autocorrect: false,
+          onChanged: on,
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: hint,
+            prefixIcon: Icon(i, size: 20),
+            border: const OutlineInputBorder(),
+          ),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final w = cleanWa(wa.text);
+    return PopScope(
+      canPop: !widget.force,
+      child: AlertDialog(
+        backgroundColor: card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(widget.force ? 'Lengkapi kontak kamu' : 'Kontak'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              widget.force
+                  ? 'Nomor WhatsApp wajib diisi supaya user lain bisa menghubungi kamu.'
+                  : 'Nomor WhatsApp wajib, sosmed lain boleh dikosongkan.',
+              style: const TextStyle(color: mu, fontSize: 13),
+            ),
+            field(wa, 'WhatsApp (wajib)', '628123456789', Icons.chat,
+                kb: TextInputType.phone, on: (_) => setState(() {})),
+            if (w != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6, left: 4),
+                child: Text('Link: https://wa.me/$w', style: const TextStyle(color: mu, fontSize: 12)),
+              ),
+            field(tg, 'Username Telegram', 'tanpa @', Icons.send_rounded),
+            field(tt, 'Username TikTok', 'tanpa @', Icons.music_note),
+            field(ig, 'Username Instagram', 'tanpa @', Icons.camera_alt_outlined),
+            if (err.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(err, style: const TextStyle(color: Color(0xFFFF6B81), fontSize: 13)),
+              ),
+          ]),
+        ),
+        actions: [
+          if (widget.force)
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () {
+                      Navigator.pop(context);
+                      sb.auth.signOut();
+                    },
+              child: const Text('Keluar'),
+            )
+          else
+            TextButton(onPressed: busy ? null : () => Navigator.pop(context), child: const Text('Batal')),
+          FilledButton(onPressed: busy ? null : save, child: Text(busy ? 'Menyimpan...' : 'Simpan')),
+        ],
+      ),
+    );
+  }
+}
+
+// =====================================================================
+// SNIPPET
+// Helper & Developer: tambah / edit / hapus. Rank lain: lihat + request.
+// =====================================================================
+const kLangs = [
+  'Dart', 'JavaScript', 'TypeScript', 'Python', 'Java', 'Kotlin', 'PHP', 'Lua',
+  'C++', 'C#', 'HTML', 'CSS', 'SQL', 'Bash', 'JSON', 'Lainnya',
+];
+const monoStyle =
+    TextStyle(fontFamily: 'monospace', fontSize: 12.5, height: 1.4, color: Color(0xFFE6EAF7));
+
+bool isStaff(String? rank) => rank == 'helper' || rank == 'developer';
+
+Widget oceanPage({PreferredSizeWidget? appBar, required Widget body}) => Stack(children: [
+      const Positioned.fill(child: OceanBg()),
+      Positioned.fill(child: ColoredBox(color: Colors.black.withOpacity(kScrim))),
+      Scaffold(backgroundColor: Colors.transparent, appBar: appBar, body: body),
+    ]);
+
+Future<bool> confirmDlg(BuildContext c, String title, String body, String yes) async {
+  final ok = await showDialog<bool>(
+    context: c,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: card,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: Text(title),
+      content: Text(body),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFFFF4D6D)),
+          child: Text(yes),
+        ),
+      ],
+    ),
+  );
+  return ok == true;
+}
+
+Widget langChip(String l) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: ac.withOpacity(.25),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: ac.withOpacity(.5)),
+      ),
+      child: Text(l, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+    );
+
+Widget statusChip(bool done) {
+  final c = done ? const Color(0xFF34D399) : const Color(0xFFFBBF24);
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+    decoration: BoxDecoration(color: c.withOpacity(.2), borderRadius: BorderRadius.circular(99)),
+    child: Text(done ? 'Selesai' : 'Menunggu',
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
+  );
+}
+
+Widget actChip(IconData i, String t, VoidCallback f, {Color c = Colors.white}) => InkWell(
+      borderRadius: BorderRadius.circular(99),
+      onTap: f,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(99),
+          border: Border.all(color: Colors.white.withOpacity(.2)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(i, size: 16, color: c),
+          const SizedBox(width: 5),
+          Text(t, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c)),
+        ]),
+      ),
+    );
+
+class SnippetPage extends StatefulWidget {
+  final Map<String, dynamic> me;
+  const SnippetPage({super.key, required this.me});
+  @override
+  State<SnippetPage> createState() => _SnippetPageState();
+}
+
+class _SnippetPageState extends State<SnippetPage> {
+  List<Map<String, dynamic>> items = [], reqs = [];
+  final subs = <StreamSubscription>[];
+  final search = TextEditingController();
+  int seg = 0;
+  String q = '';
+
+  bool get staff => isStaff(widget.me['rank'] as String?);
+  String get myId => sb.auth.currentUser!.id;
+
+  @override
+  void initState() {
+    super.initState();
+    subs.add(sb
+        .from('snippets')
+        .stream(primaryKey: ['id'])
+        .order('created_at', ascending: false)
+        .listen((r) {
+      if (mounted) setState(() => items = r);
+    }, onError: (_) {}));
+    subs.add(sb
+        .from('snippet_requests')
+        .stream(primaryKey: ['id'])
+        .order('created_at', ascending: false)
+        .listen((r) {
+      if (mounted) setState(() => reqs = r);
+    }, onError: (_) {}));
+  }
+
+  @override
+  void dispose() {
+    for (final s in subs) {
+      s.cancel();
+    }
+    search.dispose();
+    super.dispose();
+  }
+
+  void openEditor({Map<String, dynamic>? fromReq}) => Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => SnippetEditorPage(me: widget.me, fromReq: fromReq)));
+
+  void openRequest() => showDialog<void>(context: context, builder: (_) => RequestDialog(me: widget.me));
+
+  Future<void> markDone(Map<String, dynamic> r) async {
+    try {
+      await sb.from('snippet_requests').update({'status': 'done'}).eq('id', r['id']);
+    } on PostgrestException catch (e) {
+      if (mounted) snack(context, e.message);
+    } catch (_) {
+      if (mounted) snack(context, 'Gagal memperbarui request');
+    }
+  }
+
+  Future<void> delReq(Map<String, dynamic> r) async {
+    if (!await confirmDlg(context, 'Hapus request?', '"${r['title']}" akan dihapus.', 'Hapus')) return;
+    try {
+      await sb.from('snippet_requests').delete().eq('id', r['id']);
+    } on PostgrestException catch (e) {
+      if (mounted) snack(context, e.message);
+    } catch (_) {
+      if (mounted) snack(context, 'Gagal menghapus request');
+    }
+  }
+
+  Widget segBar(int openCount) => Glass(
+        radius: 26,
+        strength: .30,
+        padding: const EdgeInsets.all(4),
+        child: Row(children: [
+          for (final e in [
+            (0, 'Snippet', Icons.code),
+            (1, staff ? 'Request ($openCount)' : 'Request Saya', Icons.lightbulb_outline),
+          ])
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => seg = e.$1),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(22),
+                    color: seg == e.$1 ? Colors.white.withOpacity(.22) : Colors.transparent,
+                  ),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Icon(e.$3, size: 18, color: seg == e.$1 ? Colors.white : Colors.white70),
+                    const SizedBox(width: 6),
+                    Text(e.$2,
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: seg == e.$1 ? Colors.white : Colors.white70)),
+                  ]),
+                ),
+              ),
+            ),
+        ]),
+      );
+
+  Widget snippetCard(Map<String, dynamic> s) {
+    final code = (s['code'] ?? '').toString();
+    final lines = code.split('\n');
+    final more = lines.length > 5;
+    final prev = lines.take(5).join('\n') + (more ? '\n…' : '');
+    final desc = _s(s['description']);
+    final created = _s(s['created_at']);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: GestureDetector(
+        onTap: () => Navigator.push(
+            context, MaterialPageRoute(builder: (_) => SnippetDetailPage(snippet: s, me: widget.me))),
+        child: Glass(
+          radius: 22,
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(
+                child: Text(_s(s['title']),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(width: 8),
+              langChip(_s(s['language']).isEmpty ? 'Lainnya' : _s(s['language'])),
+            ]),
+            if (desc.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(desc, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: mu, fontSize: 13)),
+              ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: Colors.black.withOpacity(.35), borderRadius: BorderRadius.circular(12)),
+              child: Text(prev, maxLines: 6, overflow: TextOverflow.clip, style: monoStyle),
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              const Icon(Icons.person_outline, size: 14, color: mu),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(_s(s['author_name']).isEmpty ? '-' : _s(s['author_name']),
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: mu, fontSize: 12)),
+              ),
+              if (created.isNotEmpty) ...[
+                const SizedBox(width: 10),
+                Text(chatTime(created), style: const TextStyle(color: mu, fontSize: 12)),
+              ],
+              const Spacer(),
+              InkWell(
+                borderRadius: BorderRadius.circular(99),
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: code));
+                  snack(context, 'Kode disalin');
+                },
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(Icons.copy_rounded, size: 18, color: Colors.white70),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget reqCard(Map<String, dynamic> r) {
+    final done = r['status'] == 'done';
+    final mine = r['user_id'] == myId;
+    final detail = _s(r['detail']);
+    final created = _s(r['created_at']);
+    final canDel = staff || (mine && !done);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Glass(
+        radius: 22,
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: Text(_s(r['title']), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            ),
+            const SizedBox(width: 8),
+            statusChip(done),
+          ]),
+          if (detail.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(detail, style: const TextStyle(color: mu, fontSize: 13)),
+            ),
+          const SizedBox(height: 8),
+          Row(children: [
+            const Icon(Icons.person_outline, size: 14, color: mu),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(mine ? 'Kamu' : _s(r['username']),
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: mu, fontSize: 12)),
+            ),
+            const Spacer(),
+            if (created.isNotEmpty) Text(chatTime(created), style: const TextStyle(color: mu, fontSize: 12)),
+          ]),
+          if ((staff && !done) || canDel) ...[
+            const SizedBox(height: 10),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              if (staff && !done) actChip(Icons.add, 'Buat snippet', () => openEditor(fromReq: r)),
+              if (staff && !done) actChip(Icons.check, 'Selesai', () => markDone(r)),
+              if (canDel) actChip(Icons.delete_outline, 'Hapus', () => delReq(r), c: const Color(0xFFFF6B81)),
+            ]),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  Widget empty(String t) => Padding(
+        padding: const EdgeInsets.all(28),
+        child: Center(child: Text(t, style: const TextStyle(color: Colors.white70))),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final ql = q.trim().toLowerCase();
+    final list = items.where((s) {
+      if (ql.isEmpty) return true;
+      return _s(s['title']).toLowerCase().contains(ql) ||
+          _s(s['language']).toLowerCase().contains(ql) ||
+          _s(s['description']).toLowerCase().contains(ql);
+    }).toList();
+    final myReqs = staff ? reqs : reqs.where((r) => r['user_id'] == myId).toList();
+    final openCount = myReqs.where((r) => r['status'] != 'done').length;
+
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(18, 20, 18, 120),
+      children: [
+        const Text('Snippet', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 14),
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: GlassButton(
+            icon: Icon(staff ? Icons.add : Icons.lightbulb_outline),
+            label: staff ? 'Tambah Snippet' : 'Request Snippet',
+            onPressed: () => staff ? openEditor() : openRequest(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        segBar(openCount),
+        const SizedBox(height: 12),
+        if (seg == 0) ...[
+          Glass(
+            radius: 22,
+            strength: .30,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(children: [
+              const Icon(Icons.search, size: 20, color: Colors.white70),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: search,
+                  autocorrect: false,
+                  onChanged: (v) => setState(() => q = v),
+                  decoration: const InputDecoration(hintText: 'Cari snippet...', border: InputBorder.none),
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 12),
+          if (list.isEmpty) empty(items.isEmpty ? 'Belum ada snippet' : 'Tidak ada yang cocok'),
+          for (final s in list) snippetCard(s),
+        ] else ...[
+          if (myReqs.isEmpty) empty(staff ? 'Belum ada request' : 'Kamu belum pernah request snippet'),
+          for (final r in myReqs) reqCard(r),
+        ],
+      ],
+    );
+  }
+}
+
+class RequestDialog extends StatefulWidget {
+  final Map<String, dynamic> me;
+  const RequestDialog({super.key, required this.me});
+  @override
+  State<RequestDialog> createState() => _RequestDialogState();
+}
+
+class _RequestDialogState extends State<RequestDialog> {
+  final t = TextEditingController(), d = TextEditingController();
+  String err = '';
+  bool busy = false;
+
+  @override
+  void dispose() {
+    t.dispose();
+    d.dispose();
+    super.dispose();
+  }
+
+  Future<void> send() async {
+    final title = t.text.trim();
+    if (title.length < 3) {
+      setState(() => err = 'Judul minimal 3 karakter');
+      return;
+    }
+    setState(() {
+      busy = true;
+      err = '';
+    });
+    final nav = Navigator.of(context);
+    final msg = ScaffoldMessenger.of(context);
+    try {
+      await sb.from('snippet_requests').insert({
+        'user_id': sb.auth.currentUser!.id,
+        'username': widget.me['username'],
+        'title': title,
+        'detail': d.text.trim(),
+      });
+      nav.pop();
+      msg.showSnackBar(const SnackBar(content: Text('Request terkirim')));
+      return;
+    } on PostgrestException catch (e) {
+      if (mounted) setState(() => err = e.message);
+    } catch (_) {
+      if (mounted) setState(() => err = 'Gagal mengirim request');
+    }
+    if (mounted) setState(() => busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        backgroundColor: card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Request Snippet'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: t,
+              decoration: const InputDecoration(
+                  labelText: 'Snippet apa yang kamu butuhkan?', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: d,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(
+                  labelText: 'Detail (opsional)', alignLabelWithHint: true, border: OutlineInputBorder()),
+            ),
+            if (err.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(err, style: const TextStyle(color: Color(0xFFFF6B81), fontSize: 13)),
+              ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: busy ? null : () => Navigator.pop(context), child: const Text('Batal')),
+          FilledButton(onPressed: busy ? null : send, child: Text(busy ? 'Mengirim...' : 'Kirim')),
+        ],
+      );
+}
+
+class SnippetDetailPage extends StatelessWidget {
+  final Map<String, dynamic> snippet, me;
+  const SnippetDetailPage({super.key, required this.snippet, required this.me});
+
+  Future<void> del(BuildContext c, Map<String, dynamic> s) async {
+    if (!await confirmDlg(c, 'Hapus snippet?', '"${s['title']}" akan dihapus permanen.', 'Hapus')) return;
+    if (!c.mounted) return;
+    try {
+      await sb.from('snippets').delete().eq('id', s['id']);
+      if (c.mounted) Navigator.pop(c);
+    } on PostgrestException catch (e) {
+      if (c.mounted) snack(c, e.message);
+    } catch (_) {
+      if (c.mounted) snack(c, 'Gagal menghapus snippet');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final staff = isStaff(me['rank'] as String?);
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: sb.from('snippets').stream(primaryKey: ['id']).eq('id', snippet['id']),
+      initialData: [snippet],
+      builder: (ctx, snap) {
+        final rows = snap.data ?? const <Map<String, dynamic>>[];
+        final bar = AppBar(backgroundColor: Colors.transparent, elevation: 0, scrolledUnderElevation: 0);
+        if (rows.isEmpty) {
+          return oceanPage(appBar: bar, body: const Center(child: Text('Snippet ini sudah dihapus')));
+        }
+        final s = rows.first;
+        final code = (s['code'] ?? '').toString();
+        final desc = _s(s['description']);
+        final created = _s(s['created_at']);
+        return oceanPage(
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            actions: [
+              if (staff)
+                IconButton(
+                  tooltip: 'Edit',
+                  icon: const Icon(Icons.edit_outlined),
+                  onPressed: () => Navigator.push(
+                      ctx, MaterialPageRoute(builder: (_) => SnippetEditorPage(me: me, snippet: s))),
+                ),
+              if (staff)
+                IconButton(
+                  tooltip: 'Hapus',
+                  icon: const Icon(Icons.delete_outline, color: Color(0xFFFF6B81)),
+                  onPressed: () => del(ctx, s),
+                ),
+            ],
+          ),
+          body: SafeArea(
+            child: ListView(
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+              children: [
+                Text(_s(s['title']), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 10),
+                Row(children: [
+                  langChip(_s(s['language']).isEmpty ? 'Lainnya' : _s(s['language'])),
+                  const SizedBox(width: 10),
+                  const Icon(Icons.person_outline, size: 14, color: mu),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(_s(s['author_name']).isEmpty ? '-' : _s(s['author_name']),
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: mu, fontSize: 13)),
+                  ),
+                  if (created.isNotEmpty) ...[
+                    const SizedBox(width: 10),
+                    Text(chatTime(created), style: const TextStyle(color: mu, fontSize: 13)),
+                  ],
+                ]),
+                if (desc.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Text(desc, style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4)),
+                ],
+                const SizedBox(height: 16),
+                Glass(
+                  radius: 18,
+                  padding: const EdgeInsets.all(14),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: SelectableText(code, style: monoStyle.copyWith(fontSize: 13)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: GlassButton(
+                    icon: const Icon(Icons.copy_rounded),
+                    label: 'Salin kode',
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: code));
+                      snack(ctx, 'Kode disalin');
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class SnippetEditorPage extends StatefulWidget {
+  final Map<String, dynamic> me;
+  final Map<String, dynamic>? snippet; // != null -> edit
+  final Map<String, dynamic>? fromReq; // != null -> isi awal dari request
+  const SnippetEditorPage({super.key, required this.me, this.snippet, this.fromReq});
+  @override
+  State<SnippetEditorPage> createState() => _SnippetEditorPageState();
+}
+
+class _SnippetEditorPageState extends State<SnippetEditorPage> {
+  late final title = TextEditingController(text: _s(widget.snippet?['title'] ?? widget.fromReq?['title']));
+  late final desc =
+      TextEditingController(text: _s(widget.snippet?['description'] ?? widget.fromReq?['detail']));
+  late final code = TextEditingController(text: (widget.snippet?['code'] ?? '').toString());
+  late String lang = initLang();
+  String err = '';
+  bool busy = false;
+
+  String initLang() {
+    final l = _s(widget.snippet?['language']);
+    if (kLangs.contains(l)) return l;
+    return widget.snippet == null ? 'Dart' : 'Lainnya';
+  }
+
+  @override
+  void dispose() {
+    title.dispose();
+    desc.dispose();
+    code.dispose();
+    super.dispose();
+  }
+
+  Future<void> save() async {
+    final t = title.text.trim();
+    final c = code.text;
+    if (t.isEmpty) {
+      setState(() => err = 'Judul wajib diisi');
+      return;
+    }
+    if (c.trim().isEmpty) {
+      setState(() => err = 'Kode wajib diisi');
+      return;
+    }
+    setState(() {
+      busy = true;
+      err = '';
+    });
+    final data = <String, dynamic>{
+      'title': t,
+      'description': desc.text.trim(),
+      'language': lang,
+      'code': c,
+    };
+    try {
+      final old = widget.snippet;
+      if (old == null) {
+        await sb.from('snippets').insert(<String, dynamic>{
+          ...data,
+          'author_id': sb.auth.currentUser!.id,
+          'author_name': widget.me['username'],
+        });
+        final rq = widget.fromReq;
+        if (rq != null) {
+          await sb.from('snippet_requests').update({'status': 'done'}).eq('id', rq['id']);
+        }
+      } else {
+        await sb.from('snippets').update(<String, dynamic>{
+          ...data,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', old['id']);
+      }
+      if (!mounted) return;
+      snack(context, old == null ? 'Snippet ditambahkan' : 'Snippet diperbarui');
+      Navigator.pop(context);
+      return;
+    } on PostgrestException catch (e) {
+      if (mounted) setState(() => err = e.message);
+    } catch (_) {
+      if (mounted) setState(() => err = 'Gagal menyimpan snippet');
+    }
+    if (mounted) setState(() => busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) => oceanPage(
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          title: Text(widget.snippet == null ? 'Tambah Snippet' : 'Edit Snippet'),
+        ),
+        body: SafeArea(
+          child: ListView(
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+            children: [
+              TextField(
+                controller: title,
+                decoration: const InputDecoration(labelText: 'Judul', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Bahasa',
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.fromLTRB(12, 12, 12, 8),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: lang,
+                    isExpanded: true,
+                    isDense: true,
+                    dropdownColor: card,
+                    items: [for (final l in kLangs) DropdownMenuItem<String>(value: l, child: Text(l))],
+                    onChanged: (v) => setState(() => lang = v ?? lang),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: desc,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                    labelText: 'Deskripsi (opsional)', alignLabelWithHint: true, border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: code,
+                minLines: 10,
+                maxLines: null,
+                autocorrect: false,
+                enableSuggestions: false,
+                keyboardType: TextInputType.multiline,
+                style: monoStyle.copyWith(fontSize: 13),
+                decoration: const InputDecoration(
+                    labelText: 'Kode', alignLabelWithHint: true, border: OutlineInputBorder()),
+              ),
+              if (err.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(err, style: const TextStyle(color: Color(0xFFFF6B81), fontSize: 13)),
+                ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: GlassButton(
+                  icon: const Icon(Icons.save_outlined),
+                  label: busy ? 'Menyimpan...' : 'Simpan',
+                  onPressed: busy ? null : save,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 }
