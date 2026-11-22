@@ -607,7 +607,7 @@ Future<void> main() async {
     lensProgram = null; // fallback: blur biasa
   }
   runApp(MaterialApp(
-    title: 'NnevApp',
+    title: 'Evanescia Apps',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       brightness: Brightness.dark,
@@ -823,7 +823,7 @@ class _LoginPageState extends State<LoginPage> {
                     child: const Icon(Icons.smartphone, size: 32, color: Colors.white),
                   ),
                   const SizedBox(height: 14),
-                  const Text('NnevApp', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
+                  const Text('Evanescia Apps', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   const Text('Masuk dengan akun yang kamu punya', style: TextStyle(color: mu)),
                   const SizedBox(height: 26),
