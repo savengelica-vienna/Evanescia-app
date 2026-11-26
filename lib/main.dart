@@ -1269,7 +1269,7 @@ class _UpdatePageState extends State<UpdatePage> {
             strength: .58,
             onPressed: () => Navigator.push(
               context,
-              CupertinoPageRoute(builder: (_) => const GoldMarketPage()),
+              CupertinoPageRoute(builder: (_) => GoldMarketPage()),
             ),
             icon: const Icon(Icons.candlestick_chart_rounded),
             label: 'Saham Gold',
