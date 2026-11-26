@@ -1269,7 +1269,7 @@ class _UpdatePageState extends State<UpdatePage> {
             strength: .58,
             onPressed: () => Navigator.push(
               context,
-              CupertinoPageRoute(builder: (_) => GoldMarketPage()),
+              CupertinoPageRoute(builder: (_) => const GoldMarketPage()),
             ),
             icon: const Icon(Icons.candlestick_chart_rounded),
             label: 'Saham Gold',
@@ -4912,4 +4912,151 @@ class _GroupInfoDialogState extends State<GroupInfoDialog> {
           FilledButton(onPressed: busy ? null : save, child: Text(busy ? 'Menyimpan...' : 'Simpan')),
         ],
       );
+}
+
+const kBotWa = '6287861665305';
+
+class _Candle {
+  final double o, h, l, c;
+  const _Candle(this.o, this.h, this.l, this.c);
+}
+
+class GoldMarketPage extends StatefulWidget {
+  const GoldMarketPage({super.key});
+  @override
+  State<GoldMarketPage> createState() => _GoldMarketPageState();
+}
+
+class _GoldMarketPageState extends State<GoldMarketPage> {
+  final _rnd = math.Random();
+  final List<_Candle> _candles = [];
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    var p = 2650.0;
+    for (var i = 0; i < 40; i++) {
+      final c = _next(p);
+      _candles.add(c);
+      p = c.c;
+    }
+    _timer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted) return;
+      setState(() {
+        _candles.add(_next(_candles.last.c));
+        if (_candles.length > 40) _candles.removeAt(0);
+      });
+    });
+  }
+
+  _Candle _next(double open) {
+    final close = open + (_rnd.nextDouble() - .5) * 14;
+    final hi = math.max(open, close) + _rnd.nextDouble() * 5;
+    final lo = math.min(open, close) - _rnd.nextDouble() * 5;
+    return _Candle(open, hi, lo, close);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _openBot() async {
+    final u = Uri.parse('https://wa.me/$kBotWa');
+    await launchUrl(u, mode: LaunchMode.externalApplication);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final last = _candles.last;
+    final first = _candles.first;
+    final diff = last.c - first.o;
+    final up = diff >= 0;
+    final col = up ? const Color(0xFF2ED47A) : const Color(0xFFFF6B81);
+    return Scaffold(
+      backgroundColor: bg,
+      appBar: AppBar(
+        backgroundColor: bg,
+        title: const Text('Saham Gold'),
+      ),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: card,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: line),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('XAU / USD', style: TextStyle(color: mu, fontSize: 13)),
+            const SizedBox(height: 4),
+            Text('\$${last.c.toStringAsFixed(2)}',
+                style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w700)),
+            Text('${up ? '+' : ''}${diff.toStringAsFixed(2)}',
+                style: TextStyle(color: col, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 260,
+              width: double.infinity,
+              child: CustomPaint(painter: _GoldChartPainter(_candles)),
+            ),
+            const SizedBox(height: 8),
+            const Text('Data simulasi (demo), bukan harga pasar asli.',
+                style: TextStyle(color: mu, fontSize: 11)),
+          ]),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 50,
+          child: GlassButton(
+            tint: const Color(0xFF25D366),
+            strength: .5,
+            onPressed: _openBot,
+            icon: const Icon(Icons.chat_rounded),
+            label: 'Chat bot WhatsApp',
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _GoldChartPainter extends CustomPainter {
+  final List<_Candle> data;
+  _GoldChartPainter(this.data);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.isEmpty) return;
+    var lo = data.map((e) => e.l).reduce(math.min);
+    var hi = data.map((e) => e.h).reduce(math.max);
+    if (hi - lo < 1) hi = lo + 1;
+    double y(double v) => size.height - (v - lo) / (hi - lo) * size.height;
+    final grid = Paint()..color = line..strokeWidth = 1;
+    for (var i = 0; i <= 4; i++) {
+      final gy = size.height * i / 4;
+      canvas.drawLine(Offset(0, gy), Offset(size.width, gy), grid);
+    }
+    final w = size.width / data.length;
+    for (var i = 0; i < data.length; i++) {
+      final c = data[i];
+      final up = c.c >= c.o;
+      final p = Paint()
+        ..color = up ? const Color(0xFF2ED47A) : const Color(0xFFFF6B81)
+        ..strokeWidth = 1.5;
+      final x = i * w + w / 2;
+      canvas.drawLine(Offset(x, y(c.h)), Offset(x, y(c.l)), p);
+      final top = y(math.max(c.o, c.c));
+      final bot = y(math.min(c.o, c.c));
+      canvas.drawRect(
+        Rect.fromLTRB(x - w * .3, top, x + w * .3, math.max(bot, top + 1.5)),
+        p..style = PaintingStyle.fill,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GoldChartPainter old) => true;
 }
