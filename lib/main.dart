@@ -1260,6 +1260,21 @@ class _UpdatePageState extends State<UpdatePage> {
             ),
           ),
         ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: GlassButton(
+            tint: const Color(0xFFFFB800),
+            strength: .58,
+            onPressed: () => Navigator.push(
+              context,
+              CupertinoPageRoute(builder: (_) => const GoldMarketPage()),
+            ),
+            icon: const Icon(Icons.candlestick_chart_rounded),
+            label: 'Saham Gold',
+          ),
+        ),
       ]);
 }
 
